@@ -104,13 +104,14 @@ function getRecentProjects(sessions: SessionInfo[]): string[] {
 }
 
 /** Fixed quick-access directories shown above the session-derived recent list. */
-function getPinnedProjects(homeDir: string): string[] {
+function getPinnedProjects(homeDir: string, jumperpediaHome: string): string[] {
   if (!homeDir) return [];
+  if (!jumperpediaHome) return [homeDir];
   return [
-    `${homeDir}/HalfaCloud/Jumperpedia`,
-    `${homeDir}/HalfaCloud/Jumperpedia/Quicknotes`,
-    `${homeDir}/HalfaCloud/Jumperpedia/Guides`,
-    `${homeDir}/HalfaCloud/Jumperpedia/Courses`,
+    jumperpediaHome,
+    `${jumperpediaHome}/Quicknotes`,
+    `${jumperpediaHome}/Guides`,
+    `${jumperpediaHome}/Courses`,
     homeDir,
   ];
 }
@@ -393,6 +394,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
   const [homeDir, setHomeDir] = useState<string>("");
+  const [jumperpediaHome, setJumperpediaHome] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
   const [customPathOpen, setCustomPathOpen] = useState(false);
@@ -525,8 +527,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [explorerRefreshKey]);
 
   useEffect(() => {
-    fetch("/api/home").then((r) => r.json()).then((d: { home?: string }) => {
+    fetch("/api/home").then((r) => r.json()).then((d: { home?: string; jumperpediaHome?: string }) => {
       if (d.home) setHomeDir(d.home);
+      if (d.jumperpediaHome) setJumperpediaHome(d.jumperpediaHome);
     }).catch(() => {});
   }, []);
 
@@ -806,7 +809,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const pinnedProjects = getPinnedProjects(homeDir);
+  const pinnedProjects = getPinnedProjects(homeDir, jumperpediaHome);
   const recentProjects = getRecentProjects(allSessions).filter((p) => !pinnedProjects.includes(p));
   const showProjectFilter = pinnedProjects.length + recentProjects.length > 8;
   const visiblePinnedProjects = projectFilter.trim()
