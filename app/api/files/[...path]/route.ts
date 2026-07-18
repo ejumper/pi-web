@@ -73,28 +73,34 @@ function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
 }
 
-async function getUploadDirectory(segments: string[]): Promise<
-  { directory: string } | { response: NextResponse }
+// Resolves a browsable path from URL segments and validates it against the
+// allow-list twice: once on the raw path, once on the realpath'd path against
+// realpath'd roots (so a symlink inside an allowed root can't redirect
+// writes/deletes outside it). Shared by upload, create, and delete — the only
+// difference between them is whether the target must be a directory.
+async function resolveAllowedPath(
+  segments: string[],
+  options: { requireDirectory?: boolean } = {}
+): Promise<
+  { realPath: string; stat: fs.Stats; realRoots: Set<string> } | { response: NextResponse }
 > {
-  const directory = filePathFromSegments(segments);
+  const target = filePathFromSegments(segments);
   const allowedRoots = await getAllowedFileRoots();
-  if (!isFilePathAllowed(directory, allowedRoots)) {
+  if (!isFilePathAllowed(target, allowedRoots)) {
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
   }
 
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(directory);
+    stat = fs.statSync(target);
   } catch {
-    return { response: NextResponse.json({ error: "Upload directory not found" }, { status: 404 }) };
+    return { response: NextResponse.json({ error: "Not found" }, { status: 404 }) };
   }
-  if (!stat.isDirectory()) {
-    return { response: NextResponse.json({ error: "Upload target is not a directory" }, { status: 400 }) };
+  if (options.requireDirectory && !stat.isDirectory()) {
+    return { response: NextResponse.json({ error: "Target is not a directory" }, { status: 400 }) };
   }
 
-  // A browsable directory can be a symlink. Resolve both sides before writes
-  // so a symlink inside an allowed root cannot redirect uploads outside it.
-  const realDirectory = fs.realpathSync(directory);
+  const realPath = fs.realpathSync(target);
   const realRoots = new Set<string>();
   for (const root of allowedRoots) {
     try {
@@ -103,11 +109,19 @@ async function getUploadDirectory(segments: string[]): Promise<
       // Ignore stale session roots that no longer exist.
     }
   }
-  if (!isFilePathAllowed(realDirectory, realRoots)) {
+  if (!isFilePathAllowed(realPath, realRoots)) {
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
   }
 
-  return { directory: realDirectory };
+  return { realPath, stat, realRoots };
+}
+
+async function resolveAllowedDirectory(segments: string[]): Promise<
+  { directory: string } | { response: NextResponse }
+> {
+  const resolved = await resolveAllowedPath(segments, { requireDirectory: true });
+  if ("response" in resolved) return resolved;
+  return { directory: resolved.realPath };
 }
 
 function parseUploadFileNames(value: unknown): string[] | null {
@@ -121,9 +135,9 @@ export async function POST(
 ) {
   try {
     const { path: segments } = await params;
-    const uploadDirectory = await getUploadDirectory(segments);
-    if ("response" in uploadDirectory) return uploadDirectory.response;
-    const { directory } = uploadDirectory;
+    const resolvedDirectory = await resolveAllowedDirectory(segments);
+    if ("response" in resolvedDirectory) return resolvedDirectory.response;
+    const { directory } = resolvedDirectory;
     const type = request.nextUrl.searchParams.get("type") ?? "upload";
 
     if (type === "upload-check") {
@@ -137,6 +151,35 @@ export async function POST(
         return NextResponse.json({ error: validationError }, { status: 400 });
       }
       return NextResponse.json(inspectUploadTargets(directory, fileNames));
+    }
+
+    if (type === "create") {
+      const body = await request.json().catch(() => null) as { name?: unknown; kind?: unknown } | null;
+      const name = typeof body?.name === "string" ? body.name : null;
+      const kind = body?.kind;
+      if (!name || (kind !== "file" && kind !== "dir")) {
+        return NextResponse.json({ error: "name (string) and kind (\"file\" | \"dir\") are required" }, { status: 400 });
+      }
+      const validationError = validateUploadFileNames([name]);
+      if (validationError) {
+        return NextResponse.json({ error: validationError }, { status: 400 });
+      }
+
+      const destination = path.join(directory, name);
+      try {
+        if (kind === "file") {
+          fs.writeFileSync(destination, "", { flag: "wx" });
+        } else {
+          fs.mkdirSync(destination);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
+        }
+        return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+      }
+      return NextResponse.json({ created: name, kind, path: destination });
     }
 
     if (type !== "upload") {
@@ -211,6 +254,32 @@ export async function POST(
       { uploaded, skipped, errors },
       { status: errors.length > 0 ? 207 : 200 },
     );
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  try {
+    const { path: segments } = await params;
+    const resolved = await resolveAllowedPath(segments);
+    if ("response" in resolved) return resolved.response;
+    const { realPath, stat, realRoots } = resolved;
+
+    // Don't let a stray click delete an entire allowed root (a project/cwd).
+    if (realRoots.has(realPath)) {
+      return NextResponse.json({ error: "Cannot delete a project root" }, { status: 400 });
+    }
+
+    if (stat.isDirectory()) {
+      fs.rmSync(realPath, { recursive: true });
+    } else {
+      fs.unlinkSync(realPath);
+    }
+    return NextResponse.json({ deleted: realPath });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

@@ -1603,6 +1603,59 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </button>
             {explorerOpen && (
               <button
+                onClick={() => fileExplorerRef.current?.startCreate("file")}
+                title="New file in project root"
+                aria-label="New file"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 26, height: 26, padding: 0,
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-dim)",
+                  cursor: "pointer",
+                  borderRadius: 5,
+                  flexShrink: 0,
+                  transition: "color 0.3s, background 0.3s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                  <path d="M14 3v6h6" />
+                  <path d="M12 13v6" />
+                  <path d="M9 16h6" />
+                </svg>
+              </button>
+            )}
+            {explorerOpen && (
+              <button
+                onClick={() => fileExplorerRef.current?.startCreate("dir")}
+                title="New folder in project root"
+                aria-label="New folder"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 26, height: 26, padding: 0,
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-dim)",
+                  cursor: "pointer",
+                  borderRadius: 5,
+                  flexShrink: 0,
+                  transition: "color 0.3s, background 0.3s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; e.currentTarget.style.background = "none"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <path d="M12 11v6" />
+                  <path d="M9 14h6" />
+                </svg>
+              </button>
+            )}
+            {explorerOpen && (
+              <button
                 onClick={() => fileExplorerRef.current?.openUploadPicker()}
                 disabled={explorerUploadBusy}
                 title="Upload files to project root"
