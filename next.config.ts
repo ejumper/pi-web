@@ -9,13 +9,17 @@ try {
   piVersion = (JSON.parse(readFileSync(piPkgPath, "utf8")) as { version: string }).version;
 } catch { /* package not found, use default */ }
 
+// Same PI_WEB_PUBLIC_URL used by lib/ntfy.ts — derive just the hostname
+// rather than duplicating it as a second env var.
+const publicHostname = process.env.PI_WEB_PUBLIC_URL ? new URL(process.env.PI_WEB_PUBLIC_URL).host : undefined;
+
 const nextConfig: NextConfig = {
   serverExternalPackages: [
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-tui",
   ],
-  allowedDevOrigins: ['192.168.*.*', 'kubuntu.taildf74fb.ts.net'],
+  allowedDevOrigins: publicHostname ? ['192.168.*.*', publicHostname] : ['192.168.*.*'],
   async headers() {
     return [
       {

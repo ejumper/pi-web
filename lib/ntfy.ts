@@ -1,11 +1,14 @@
 import { getLastAssistantEntryId, getOrGenerateFullAudio } from "./speak";
 
-const NTFY_URL = "https://notify.halfab.net";
-const NTFY_TOPIC = "pi_desktop";
-// This machine's Tailscale HTTPS hostname (see pi-web.md) — the phone
-// fetches audio through this, not localhost, since the Shortcut that plays
-// it runs on the phone, not on this machine.
-const PI_WEB_PUBLIC_URL = "https://kubuntu.taildf74fb.ts.net";
+// All three are instance-specific (this machine's ntfy server/topic and
+// public URL) — deliberately not hardcoded so they don't end up in the
+// repo. See .env.example / pi-web.md.
+const NTFY_URL = process.env.NTFY_URL;
+const NTFY_TOPIC = process.env.NTFY_TOPIC;
+// This machine's public HTTPS URL (e.g. a Tailscale hostname, see
+// pi-web.md) — the phone fetches audio through this, not localhost, since
+// the Shortcut that plays it runs on the phone, not on this machine.
+const PI_WEB_PUBLIC_URL = process.env.PI_WEB_PUBLIC_URL;
 // Must exactly match the name of the Shortcut created in the iOS Shortcuts
 // app (two actions: Get Contents of URL [Shortcut Input] -> Play Sound).
 const SHORTCUT_NAME = "PlayReply";
@@ -23,6 +26,10 @@ const SHORTCUT_NAME = "PlayReply";
  * session.
  */
 export async function sendVoicemailNotification(sessionId: string): Promise<void> {
+  if (!NTFY_URL || !NTFY_TOPIC || !PI_WEB_PUBLIC_URL) {
+    console.error("[pi-web] voicemail notify skipped: NTFY_URL, NTFY_TOPIC, and PI_WEB_PUBLIC_URL must all be set");
+    return;
+  }
   try {
     const entryId = await getLastAssistantEntryId(sessionId);
     if (!entryId) return;
