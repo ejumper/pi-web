@@ -152,12 +152,28 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   playDoneSoundRef.current = playDoneSound;
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
+  const latestMessagesRef = useRef<AgentMessage[]>([]);
+  const latestEntryIdsRef = useRef<string[]>([]);
   const wrappedOnAgentEnd = useCallback(() => {
     if (soundEnabledRef.current) {
       playDoneSoundRef.current();
     }
+    // Fire-and-forget: warm the first speech chunk for the reply that just
+    // finished, so a later tap of "Read aloud" is likely already cached
+    // (see app/api/sessions/[id]/entries/[entryId]/speak/[chunkIndex]).
+    const msgs = latestMessagesRef.current;
+    const ids = latestEntryIdsRef.current;
+    const sid = session?.id;
+    if (sid) {
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === "assistant" && ids[i]) {
+          fetch(`/api/sessions/${encodeURIComponent(sid)}/entries/${encodeURIComponent(ids[i])}/speak/0`).catch(() => {});
+          break;
+        }
+      }
+    }
     onAgentEnd?.();
-  }, [onAgentEnd]);
+  }, [onAgentEnd, session?.id]);
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((content: string) => {
@@ -185,6 +201,8 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   });
+  latestMessagesRef.current = messages;
+  latestEntryIdsRef.current = entryIds;
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {

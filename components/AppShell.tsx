@@ -68,6 +68,45 @@ export function AppShell() {
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const systemBtnRef = useRef<HTMLButtonElement>(null);
 
+  // Voicemail-notify toggle — server-authoritative per session (see
+  // lib/notify-state.ts), so it's re-synced whenever the active session
+  // changes rather than being local UI state.
+  const [notifyEnabled, setNotifyEnabledState] = useState(false);
+  // A brand-new session has no real id yet (only assigned once the first
+  // message is sent — see handleSessionCreated), so there's nothing to
+  // toggle server-side. This lets you "arm" the toggle anyway; it's applied
+  // for real the moment the session gets its id, instead of forcing a race
+  // against the first reply.
+  const [notifyPendingForNewSession, setNotifyPendingForNewSession] = useState(false);
+  useEffect(() => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId) {
+      setNotifyEnabledState(false);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notify`)
+      .then((r) => r.json())
+      .then((d: { enabled?: boolean }) => { if (!cancelled) setNotifyEnabledState(!!d.enabled); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedSession?.id]);
+
+  const handleNotifyToggle = useCallback(() => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId) {
+      setNotifyPendingForNewSession((v) => !v);
+      return;
+    }
+    const next = !notifyEnabled;
+    setNotifyEnabledState(next);
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: next }),
+    }).catch(() => {});
+  }, [selectedSession?.id, notifyEnabled]);
+
   const handleSystemPromptChange = useCallback((prompt: string | null) => {
     setSystemPrompt(prompt);
   }, []);
@@ -171,6 +210,7 @@ export function AppShell() {
     // Close any session that belongs to a different project — it no longer
     // matches the selected project directory.
     setSelectedSession(null);
+    setNotifyPendingForNewSession(false);
     setNewSessionCwd((prev) => {
       if (prev && prev !== cwd) return null;
       return prev;
@@ -191,6 +231,7 @@ export function AppShell() {
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
     setNewSessionCwd(null);
+    setNotifyPendingForNewSession(false);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
     setSystemPrompt(null);
@@ -211,6 +252,7 @@ export function AppShell() {
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
     setSelectedSession(null);
+    setNotifyPendingForNewSession(false);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
     setBranchTree([]);
@@ -243,13 +285,29 @@ export function AppShell() {
   }, []);
 
   // Called by ChatWindow when a new session gets its real id from pi
-  const handleSessionCreated = useCallback((session: SessionInfo) => {
+  const handleSessionCreated = useCallback(async (session: SessionInfo) => {
+    // Applied (and awaited) before setSelectedSession, so the id:notify sync
+    // effect's own GET — which fires right after, keyed on selectedSession.id
+    // changing — reads back true instead of racing a still-in-flight POST.
+    if (notifyPendingForNewSession) {
+      setNotifyPendingForNewSession(false);
+      try {
+        await fetch(`/api/sessions/${encodeURIComponent(session.id)}/notify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true }),
+        });
+      } catch {
+        // Best-effort — the sync effect will just read back whatever the
+        // server actually has (likely still off) if this failed.
+      }
+    }
     setNewSessionCwd(null);
     setSelectedSession(session);
     setRefreshKey((k) => k + 1);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [router, hydrateSelectedSession, notifyPendingForNewSession]);
 
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -277,6 +335,7 @@ export function AppShell() {
     if (selectedSession?.id === sessionId) {
       const cwd = selectedSession.cwd;
       setSelectedSession(null);
+      setNotifyPendingForNewSession(false);
       setNewSessionCwd(cwd ?? null);
       setSessionKey((k) => k + 1);
       setBranchTree([]);
@@ -673,6 +732,38 @@ export function AppShell() {
                 </svg>
                 {!isMobile && <span>System</span>}
               </button>
+              {(() => {
+                const notifyActive = selectedSession ? notifyEnabled : notifyPendingForNewSession;
+                return (
+                  <button
+                    onClick={handleNotifyToggle}
+                    title={
+                      !selectedSession
+                        ? (notifyPendingForNewSession
+                          ? "Voicemail notify: armed — will turn on once you send your first message"
+                          : "Voicemail notify: tap to arm for your first message")
+                        : notifyEnabled ? "Voicemail notify: on — tap to turn off" : "Voicemail notify: off — tap to turn on"
+                    }
+                    aria-label="Toggle voicemail notify"
+                    aria-pressed={notifyActive}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 36, height: "100%", padding: 0,
+                      background: "none", border: "none", borderRight: "1px solid var(--border)",
+                      color: notifyActive ? "var(--accent)" : "var(--text-muted)",
+                      cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+                    }}
+                    onMouseEnter={(e) => { if (!notifyActive) e.currentTarget.style.color = "var(--text)"; }}
+                    onMouseLeave={(e) => { if (!notifyActive) e.currentTarget.style.color = "var(--text-muted)"; }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11 5 6 9H2v6h4l5 4V5Z" />
+                      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                      <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+                    </svg>
+                  </button>
+                );
+              })()}
             </div>
           )}
           {/* Session stats — right-aligned in top bar */}

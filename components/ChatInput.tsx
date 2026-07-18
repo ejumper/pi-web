@@ -70,6 +70,13 @@ export interface ChatInputHandle {
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
+// 1 minute of continuous silence auto-stops a voice recording; the much
+// longer hard cap is a backstop in case silence detection never trips (e.g.
+// persistent background noise keeping RMS above threshold).
+const SILENCE_RMS_THRESHOLD = 0.02;
+const SILENCE_CHECK_MS = 300;
+const SILENCE_AUTO_STOP_MS = 60_000;
+const MAX_RECORDING_MS = 5 * 60_000;
 const MODEL_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function compareModelOptions(a: ModelOption, b: ModelOption): number {
@@ -94,6 +101,12 @@ function formatTokenCount(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
   return tokens.toLocaleString();
+}
+
+function formatRecordingTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 type SlashCommandPaletteItem = SlashCommandInfo | {
@@ -217,6 +230,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
+  const [recordingState, setRecordingState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [micError, setMicError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -232,11 +248,42 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const atItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const fileIndexMetaRef = useRef<{ cwd: string; fetchedAt: number } | null>(null);
   const fileIndexFetchingRef = useRef<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const recordingAudioContextRef = useRef<AudioContext | null>(null);
+  const silenceCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draftKeyRef = useRef(draftKey);
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
+
+  const insertTextAtCursor = useCallback((text: string) => {
+    const ta = textareaRef.current;
+    if (!ta) {
+      setValue((v) => v + (v ? " " : "") + text);
+      return;
+    }
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    const sep = before.length > 0 && !before.endsWith(" ") ? " " : "";
+    const newVal = before + sep + text + after;
+    setValue(newVal);
+    setAtQuery(null);
+    requestAnimationFrame(() => {
+      if (!ta) return;
+      const pos = start + sep.length + text.length;
+      ta.setSelectionRange(pos, pos);
+      ta.focus();
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, []);
 
   useImperativeHandle(ref, () => ({
     insertIfEmpty(text: string) {
@@ -270,27 +317,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       });
     },
     insertText(text: string) {
-      const ta = textareaRef.current;
-      if (!ta) {
-        setValue((v) => v + (v ? " " : "") + text);
-        return;
-      }
-      const start = ta.selectionStart ?? ta.value.length;
-      const end = ta.selectionEnd ?? ta.value.length;
-      const before = ta.value.slice(0, start);
-      const after = ta.value.slice(end);
-      const sep = before.length > 0 && !before.endsWith(" ") ? " " : "";
-      const newVal = before + sep + text + after;
-      setValue(newVal);
-      setAtQuery(null);
-      requestAnimationFrame(() => {
-        if (!ta) return;
-        const pos = start + sep.length + text.length;
-        ta.setSelectionRange(pos, pos);
-        ta.focus();
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-      });
+      insertTextAtCursor(text);
     },
     addImages(files: File[]) {
       processImageFiles(files);
@@ -346,6 +373,122 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       textareaRef.current.style.height = "auto";
     }
   }, [clearImages, draftKey]);
+
+  const handleTranscribe = useCallback(async (blob: Blob) => {
+    setRecordingState("transcribing");
+    try {
+      const formData = new FormData();
+      const ext = blob.type.includes("mp4") ? "mp4" : blob.type.includes("ogg") ? "ogg" : "webm";
+      formData.append("audio", blob, `recording.${ext}`);
+      const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+      const data = await res.json() as { text?: string; error?: string };
+      if (!res.ok || data.error) {
+        setMicError(data.error ?? `HTTP ${res.status}`);
+      } else if (data.text) {
+        insertTextAtCursor(data.text);
+      }
+    } catch (e) {
+      setMicError(String(e));
+    } finally {
+      setRecordingState("idle");
+    }
+  }, [insertTextAtCursor]);
+
+  const cleanupRecordingResources = useCallback(() => {
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    if (silenceCheckIntervalRef.current) clearInterval(silenceCheckIntervalRef.current);
+    if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
+    elapsedIntervalRef.current = null;
+    silenceCheckIntervalRef.current = null;
+    maxDurationTimerRef.current = null;
+    if (recordingAudioContextRef.current) {
+      recordingAudioContextRef.current.close().catch(() => {});
+      recordingAudioContextRef.current = null;
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop(); // fires onstop -> handleTranscribe
+    }
+    cleanupRecordingResources();
+  }, [cleanupRecordingResources]);
+
+  const startRecording = useCallback(async () => {
+    setMicError(null);
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setMicError("Microphone access denied.");
+      return;
+    }
+    micStreamRef.current = stream;
+
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(
+      (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)
+    );
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    audioChunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+    recorder.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+      handleTranscribe(blob);
+    };
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+
+    // Silence detection via RMS amplitude on a rolling analyser window.
+    const AudioContextCtor = window.AudioContext
+      ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (AudioContextCtor) {
+      const ctx = new AudioContextCtor();
+      recordingAudioContextRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+      const data = new Float32Array(analyser.fftSize);
+      let silentMs = 0;
+      silenceCheckIntervalRef.current = setInterval(() => {
+        analyser.getFloatTimeDomainData(data);
+        let sumSquares = 0;
+        for (let i = 0; i < data.length; i++) sumSquares += data[i] * data[i];
+        const rms = Math.sqrt(sumSquares / data.length);
+        if (rms > SILENCE_RMS_THRESHOLD) {
+          silentMs = 0;
+        } else {
+          silentMs += SILENCE_CHECK_MS;
+          if (silentMs >= SILENCE_AUTO_STOP_MS) stopRecording();
+        }
+      }, SILENCE_CHECK_MS);
+    }
+
+    maxDurationTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
+    elapsedIntervalRef.current = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    setRecordingSeconds(0);
+    setRecordingState("recording");
+  }, [handleTranscribe, stopRecording]);
+
+  const handleMicClick = useCallback(() => {
+    if (recordingState === "recording") {
+      stopRecording();
+    } else if (recordingState === "idle") {
+      startRecording();
+    }
+  }, [recordingState, stopRecording, startRecording]);
+
+  useEffect(() => {
+    return () => {
+      cleanupRecordingResources();
+    };
+  }, [cleanupRecordingResources]);
 
   useEffect(() => {
     if (!draftKey || draftKeyRef.current !== draftKey) return;
@@ -874,8 +1017,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       style={{
         flexShrink: 0,
         background: "transparent",
-        padding: "0 16px 8px",
+        padding: "0 16px",
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
+        // Base 8px plus the iOS safe-area inset (rounded corners/home
+        // indicator) plus a little extra cushion so the bottom button row
+        // isn't right up against the curved edge in the installed PWA.
+        paddingBottom: "calc(8px + env(safe-area-inset-bottom, 0px) + 8px)",
       }}
     >
       {/* Hidden file input */}
@@ -1359,32 +1506,80 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               )}
             </div>
           ) : (
-            <button
-              onClick={handleSend}
-              disabled={!value.trim() && !attachedImages.length}
-              style={{
-                flexShrink: 0,
-                alignSelf: "flex-end",
-                display: "flex", alignItems: "center", gap: 6,
-                padding: "7px 14px",
-                background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
-                border: "none",
-                borderRadius: 8,
-                color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
-                transition: "background 0.15s, box-shadow 0.15s",
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="2" y1="7" x2="11" y2="7" />
-                <polyline points="7.5 3 12 7 7.5 11" />
-              </svg>
-              Send
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end", position: "relative" }}>
+              {micError && (
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                  padding: "5px 9px", background: "var(--bg)", border: "1px solid rgba(239,68,68,0.35)",
+                  borderRadius: 6, color: "#ef4444", fontSize: 11, whiteSpace: "nowrap",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+                }}>
+                  {micError}
+                </div>
+              )}
+              <button
+                onClick={handleMicClick}
+                disabled={isStreaming || recordingState === "transcribing"}
+                title={recordingState === "recording" ? "Stop recording" : "Record voice message"}
+                style={{
+                  flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  height: 32,
+                  padding: recordingState === "recording" ? "0 10px" : 0,
+                  width: recordingState === "recording" ? undefined : 32,
+                  background: recordingState === "recording" ? "rgba(239,68,68,0.1)" : "none",
+                  border: recordingState === "recording" ? "1px solid rgba(239,68,68,0.35)" : "1px solid var(--border)",
+                  borderRadius: 8,
+                  color: recordingState === "recording" ? "#ef4444" : "var(--text-muted)",
+                  cursor: (isStreaming || recordingState === "transcribing") ? "not-allowed" : "pointer",
+                  opacity: isStreaming ? 0.5 : 1,
+                  fontSize: 12, fontFamily: "var(--font-mono)",
+                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                }}
+              >
+                {recordingState === "recording" ? (
+                  <>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }} />
+                    {formatRecordingTime(recordingSeconds)}
+                  </>
+                ) : recordingState === "transcribing" ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
+                    <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="2" width="6" height="12" rx="3" />
+                    <path d="M5 10a7 7 0 0 0 14 0" />
+                    <line x1="12" y1="19" x2="12" y2="22" />
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={handleSend}
+                disabled={!value.trim() && !attachedImages.length}
+                style={{
+                  flexShrink: 0,
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "7px 14px",
+                  background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
+                  border: "none",
+                  borderRadius: 8,
+                  color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
+                  cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                  boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                  transition: "background 0.15s, box-shadow 0.15s",
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="2" y1="7" x2="11" y2="7" />
+                  <polyline points="7.5 3 12 7 7.5 11" />
+                </svg>
+                Send
+              </button>
+            </div>
           )}
           </div>
         </div>

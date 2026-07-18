@@ -3,6 +3,8 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
+import { isNotifyEnabled } from "./notify-state";
+import { sendVoicemailNotification } from "./ntfy";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
@@ -143,6 +145,14 @@ export class AgentSessionWrapper {
       this.resetIdleTimer();
       if (event.type === "agent_end") {
         invalidateSessionListCache();
+        if (isNotifyEnabled(this.sessionId)) {
+          // Fire-and-forget, and deliberately not awaited: this must not
+          // block or fail the actual agent session. Runs server-side (not
+          // triggered from the browser's SSE consumer) so it fires even if
+          // the phone's tab/PWA is backgrounded or suspended — that's the
+          // whole point of the feature.
+          void sendVoicemailNotification(this.sessionId);
+        }
       }
       this.emit(event);
       // Streaming / compaction / tool events flow through here; re-broadcast

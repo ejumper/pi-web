@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "./globals.css";
@@ -12,6 +12,17 @@ const notoSansMono = Noto_Sans_Mono({
 export const metadata: Metadata = {
   title: "Pi Agent Web",
   description: "Pi Coding Agent Web Interface",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Disables the iOS PWA auto-zoom-on-input-focus behavior.
+  maximumScale: 1,
+  userScalable: false,
+  // Lets the page draw into the safe area (notch/home-indicator/rounded
+  // corners) so `env(safe-area-inset-*)` resolves to real values instead of 0.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

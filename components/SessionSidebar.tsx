@@ -103,6 +103,18 @@ function getRecentProjects(sessions: SessionInfo[]): string[] {
     .map(([root]) => root);
 }
 
+/** Fixed quick-access directories shown above the session-derived recent list. */
+function getPinnedProjects(homeDir: string): string[] {
+  if (!homeDir) return [];
+  return [
+    `${homeDir}/HalfaCloud/Jumperpedia`,
+    `${homeDir}/HalfaCloud/Jumperpedia/Quicknotes`,
+    `${homeDir}/HalfaCloud/Jumperpedia/Guides`,
+    `${homeDir}/HalfaCloud/Jumperpedia/Courses`,
+    homeDir,
+  ];
+}
+
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
 function displayCwd(cwd: string, homeDir?: string): string {
   return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
@@ -132,6 +144,62 @@ function PathLabel({ text, style }: { text: string; style?: CSSProperties }) {
     >
       <span style={{ unicodeBidi: "plaintext" }}>{text}</span>
     </span>
+  );
+}
+
+function ProjectGroupLabel({ text, bordered }: { text: string; bordered?: boolean }) {
+  return (
+    <div style={{
+      padding: bordered ? "8px 10px 3px" : "5px 10px 3px",
+      fontSize: 10,
+      fontWeight: 600,
+      letterSpacing: "0.05em",
+      textTransform: "uppercase",
+      color: "var(--text-dim)",
+      borderTop: bordered ? "1px solid var(--border)" : "none",
+    }}>
+      {text}
+    </div>
+  );
+}
+
+function ProjectButton({ project, selected, homeDir, onSelect }: {
+  project: string;
+  selected: boolean;
+  homeDir: string;
+  onSelect: (project: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(project)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        width: "100%",
+        padding: "8px 10px",
+        background: "var(--bg)",
+        border: "none",
+        borderBottom: "1px solid var(--border)",
+        color: selected ? "var(--text)" : "var(--text-muted)",
+        cursor: "pointer",
+        textAlign: "left",
+        fontSize: 11,
+        fontFamily: "var(--font-mono)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+      title={project}
+    >
+      {selected && (
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <polyline points="1.5 5 4 7.5 8.5 2.5" />
+        </svg>
+      )}
+      {!selected && <span style={{ width: 10, flexShrink: 0 }} />}
+      <PathLabel text={displayCwd(project, homeDir)} style={{ flex: 1 }} />
+    </button>
   );
 }
 
@@ -714,6 +782,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
+  const selectProject = useCallback((project: string) => {
+    setSelectedCwd(project);
+    setProjectFilter("");
+    setCustomPathOpen(false);
+    setCustomPathValue("");
+    setCustomPathError(null);
+    setDropdownOpen(false);
+  }, []);
+
   const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
     if (s.cwd) setSelectedCwd(s.cwd);
     onSelectSession(s);
@@ -729,8 +806,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentProjects = getRecentProjects(allSessions);
-  const showProjectFilter = recentProjects.length > 8;
+  const pinnedProjects = getPinnedProjects(homeDir);
+  const recentProjects = getRecentProjects(allSessions).filter((p) => !pinnedProjects.includes(p));
+  const showProjectFilter = pinnedProjects.length + recentProjects.length > 8;
+  const visiblePinnedProjects = projectFilter.trim()
+    ? pinnedProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
+    : pinnedProjects;
   const visibleProjects = projectFilter.trim()
     ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
     : recentProjects;
@@ -956,47 +1037,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </div>
               )}
               <div style={{ maxHeight: "min(50vh, 380px)", overflowY: "auto" }}>
-                {visibleProjects.map((project) => (
-                  <button
+                {visiblePinnedProjects.length > 0 && (
+                  <ProjectGroupLabel text="Quick access" />
+                )}
+                {visiblePinnedProjects.map((project) => (
+                  <ProjectButton
                     key={project}
-                    onClick={() => {
-                      setSelectedCwd(project);
-                      setProjectFilter("");
-                      setCustomPathOpen(false);
-                      setCustomPathValue("");
-                      setCustomPathError(null);
-                      setDropdownOpen(false);
-                    }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      width: "100%",
-                      padding: "8px 10px",
-                      background: "var(--bg)",
-                      border: "none",
-                      borderBottom: "1px solid var(--border)",
-                      color: project === selectedProject ? "var(--text)" : "var(--text-muted)",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      fontSize: 11,
-                      fontFamily: "var(--font-mono)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={project}
-                  >
-                    {project === selectedProject && (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                      </svg>
-                    )}
-                    {project !== selectedProject && <span style={{ width: 10, flexShrink: 0 }} />}
-                    <PathLabel text={displayCwd(project, homeDir)} style={{ flex: 1 }} />
-                  </button>
+                    project={project}
+                    selected={project === selectedProject}
+                    homeDir={homeDir}
+                    onSelect={selectProject}
+                  />
                 ))}
-                {visibleProjects.length === 0 && projectFilter.trim() && (
+                {visibleProjects.length > 0 && (
+                  <ProjectGroupLabel text="Recent" bordered={visiblePinnedProjects.length > 0} />
+                )}
+                {visibleProjects.map((project) => (
+                  <ProjectButton
+                    key={project}
+                    project={project}
+                    selected={project === selectedProject}
+                    homeDir={homeDir}
+                    onSelect={selectProject}
+                  />
+                ))}
+                {visiblePinnedProjects.length === 0 && visibleProjects.length === 0 && projectFilter.trim() && (
                   <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-dim)" }}>No matching projects</div>
                 )}
               </div>

@@ -147,7 +147,8 @@ type Selection =
   | { type: "provider"; name: string }
   | { type: "model"; providerName: string; index: number }
   | { type: "oauth"; providerId: string }
-  | { type: "apikey"; providerId: string };
+  | { type: "apikey"; providerId: string }
+  | { type: "local-models" };
 
 const API_OPTIONS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
 
@@ -1094,6 +1095,367 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
   );
 }
 
+// ── Local server ─────────────────────────────────────────────────────────────
+
+const LOCAL_MODELS: { id: string; label: string }[] = [
+  { id: "qwen35b", label: "Qwen 3.6 35B" },
+  { id: "qwen9b", label: "Qwen 3.5 9B" },
+  { id: "qwen122b", label: "Qwen 3.5 122B" },
+  { id: "qwen35bu", label: "Qwen 3.6 35B Uncensored" },
+  { id: "ornith35b", label: "Ornith 1.0 35B" },
+];
+
+// Display-only — the "clone:" prefix stays in the value posted to the API,
+// just hidden from the dropdown label.
+function stripVoicePrefix(id: string): string {
+  return id.startsWith("clone:") ? id.slice("clone:".length) : id;
+}
+
+function LocalModelsDetail() {
+  const [runningModel, setRunningModel] = useState<string | null | undefined>(undefined); // undefined = not checked yet
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [launchingId, setLaunchingId] = useState<string | null>(null);
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [output, setOutput] = useState<string | null>(null);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/local-model");
+      const d = (await res.json()) as { running: boolean; model?: string | null };
+      setRunningModel(d.running ? (d.model ?? null) : null);
+    } catch {
+      setRunningModel(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkStatus();
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, [checkStatus]);
+
+  const handleLaunch = useCallback(async (id: string) => {
+    setPendingId(null);
+    setLaunchingId(id);
+    setError(null);
+    setOutput(null);
+    try {
+      const res = await fetch("/api/local-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: id }),
+      });
+      const d = (await res.json()) as { success?: boolean; output?: string; error?: string };
+      if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
+      else setOutput(d.output ?? null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLaunchingId(null);
+      checkStatus();
+    }
+  }, [checkStatus]);
+
+  const handleStop = useCallback(async (id: string) => {
+    setStoppingId(id);
+    setError(null);
+    setOutput(null);
+    try {
+      const res = await fetch("/api/local-model", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: id }),
+      });
+      const d = (await res.json()) as { success?: boolean; output?: string; error?: string };
+      if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
+      else setOutput(d.output ?? null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setStoppingId(null);
+      checkStatus();
+    }
+  }, [checkStatus]);
+
+  // ── Voice stack (whisper-stt + read-aloud TTS) ──────────────────────────
+  const [voiceStackStatus, setVoiceStackStatus] = useState<{ sttRunning: boolean; ttsRunning: boolean } | undefined>(undefined);
+  const [voiceStackPending, setVoiceStackPending] = useState(false);
+  const [voiceStackBusy, setVoiceStackBusy] = useState<"starting" | "stopping" | null>(null);
+  const [voiceOptions, setVoiceOptions] = useState<{ id: string; description?: string }[]>([]);
+  const [selectedVoice, setSelectedVoiceState] = useState<string>("");
+  const [voiceSaving, setVoiceSaving] = useState(false);
+
+  const checkVoiceStack = useCallback(async () => {
+    try {
+      const res = await fetch("/api/voice-stack");
+      const d = (await res.json()) as { sttRunning: boolean; ttsRunning: boolean };
+      setVoiceStackStatus(d);
+    } catch {
+      setVoiceStackStatus({ sttRunning: false, ttsRunning: false });
+    }
+    try {
+      const res = await fetch("/api/voice-stack/voice");
+      const d = (await res.json()) as { voice: string; options: { id: string; description?: string }[] };
+      setSelectedVoiceState(d.voice);
+      setVoiceOptions(d.options);
+    } catch {
+      // keep previous state
+    }
+  }, []);
+
+  useEffect(() => {
+    checkVoiceStack();
+    const interval = setInterval(checkVoiceStack, 5000);
+    return () => clearInterval(interval);
+  }, [checkVoiceStack]);
+
+  const voiceStackFullyRunning = !!voiceStackStatus?.sttRunning && !!voiceStackStatus?.ttsRunning;
+
+  const handleVoiceStackToggle = useCallback(async () => {
+    if (voiceStackFullyRunning) {
+      setVoiceStackBusy("stopping");
+      try {
+        await fetch("/api/voice-stack", { method: "DELETE" });
+      } finally {
+        setVoiceStackBusy(null);
+        checkVoiceStack();
+      }
+      return;
+    }
+    setVoiceStackPending(false);
+    setVoiceStackBusy("starting");
+    try {
+      await fetch("/api/voice-stack", { method: "POST" });
+    } finally {
+      setVoiceStackBusy(null);
+      checkVoiceStack();
+    }
+  }, [voiceStackFullyRunning, checkVoiceStack]);
+
+  const handleVoiceChange = useCallback(async (voice: string) => {
+    setSelectedVoiceState(voice);
+    setVoiceSaving(true);
+    try {
+      await fetch("/api/voice-stack/voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voice }),
+      });
+    } finally {
+      setVoiceSaving(false);
+    }
+  }, []);
+
+  const voiceStackStatusLabel = (() => {
+    if (voiceStackBusy === "starting") return "starting…";
+    if (voiceStackBusy === "stopping") return "stopping…";
+    if (!voiceStackStatus) return "checking…";
+    if (voiceStackFullyRunning) return "running";
+    if (voiceStackStatus.sttRunning || voiceStackStatus.ttsRunning) {
+      return `partial (${voiceStackStatus.sttRunning ? "STT" : "TTS"} only)`;
+    }
+    return "not running";
+  })();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <SectionTitle>Local Server</SectionTitle>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: runningModel ? "#4ade80" : "var(--border)", display: "inline-block" }} />
+          <span style={{ fontSize: 11, color: runningModel ? "#4ade80" : "var(--text-dim)", fontFamily: runningModel ? "var(--font-mono)" : undefined }}>
+            {runningModel === undefined ? "checking…" : runningModel ? runningModel : "not running"}
+          </span>
+        </div>
+      </div>
+
+      <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+        Runs the matching <code>~/.local/bin/&lt;model&gt; --background</code> launcher script — identical to running it from a terminal. Starting a model stops whichever one is currently running first (only one runs at a time on port 8080).
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {LOCAL_MODELS.map((m) => {
+          const isRunning = runningModel === m.id;
+          const isStopping = stoppingId === m.id;
+          const isPending = pendingId === m.id;
+          const isLaunching = launchingId === m.id;
+          const disabled = (launchingId !== null && !isLaunching) || (stoppingId !== null && !isStopping);
+          return (
+            <div key={m.id} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+              padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
+              background: isRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
+            }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: "var(--text)" }}>{m.label}</span>
+                <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{m.id}</span>
+              </div>
+
+              {isRunning ? (
+                <button
+                  onClick={() => handleStop(m.id)}
+                  disabled={isStopping}
+                  title="Stop this model"
+                  style={{
+                    display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+                    padding: "5px 10px", background: "none", border: "1px solid rgba(74,222,128,0.35)", borderRadius: 5,
+                    color: "#4ade80", cursor: isStopping ? "not-allowed" : "pointer", fontSize: 11,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (isStopping) return;
+                    e.currentTarget.style.background = "rgba(239,68,68,0.1)";
+                    e.currentTarget.style.borderColor = "rgba(239,68,68,0.4)";
+                    e.currentTarget.style.color = "#ef4444";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "none";
+                    e.currentTarget.style.borderColor = "rgba(74,222,128,0.35)";
+                    e.currentTarget.style.color = "#4ade80";
+                  }}
+                >
+                  {isStopping ? "Stopping…" : (
+                    <>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                      Running
+                    </>
+                  )}
+                </button>
+              ) : isPending ? (
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button
+                    onClick={() => setPendingId(null)}
+                    style={{ padding: "5px 10px", background: "none", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleLaunch(m.id)}
+                    style={{ padding: "5px 10px", background: "var(--accent)", border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+                  >
+                    Confirm start
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setPendingId(m.id)}
+                  disabled={disabled}
+                  style={{
+                    padding: "5px 12px", background: "none", border: "1px solid var(--border)", borderRadius: 5,
+                    color: disabled ? "var(--text-dim)" : "var(--text-muted)",
+                    cursor: disabled ? "not-allowed" : "pointer", fontSize: 11, flexShrink: 0,
+                  }}
+                >
+                  {isLaunching ? "Starting…" : "Start"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {error && <p style={{ margin: 0, fontSize: 12, color: "#f87171", whiteSpace: "pre-wrap" }}>{error}</p>}
+      {output && <pre style={{ margin: 0, fontSize: 11, color: "var(--text-muted)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 6, padding: 10 }}>{output}</pre>}
+
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+          padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
+          background: voiceStackFullyRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
+        }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 12, color: "var(--text)" }}>Voice Stack</span>
+            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>whisper-stt + read-aloud · {voiceStackStatusLabel}</span>
+          </div>
+
+          {voiceStackFullyRunning ? (
+            <button
+              onClick={handleVoiceStackToggle}
+              disabled={voiceStackBusy !== null}
+              title="Stop the voice stack"
+              style={{
+                display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
+                padding: "5px 10px", background: "none", border: "1px solid rgba(74,222,128,0.35)", borderRadius: 5,
+                color: "#4ade80", cursor: voiceStackBusy ? "not-allowed" : "pointer", fontSize: 11,
+              }}
+              onMouseEnter={(e) => {
+                if (voiceStackBusy) return;
+                e.currentTarget.style.background = "rgba(239,68,68,0.1)";
+                e.currentTarget.style.borderColor = "rgba(239,68,68,0.4)";
+                e.currentTarget.style.color = "#ef4444";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "none";
+                e.currentTarget.style.borderColor = "rgba(74,222,128,0.35)";
+                e.currentTarget.style.color = "#4ade80";
+              }}
+            >
+              {voiceStackBusy === "stopping" ? "Stopping…" : (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Running
+                </>
+              )}
+            </button>
+          ) : voiceStackPending ? (
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button
+                onClick={() => setVoiceStackPending(false)}
+                style={{ padding: "5px 10px", background: "none", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVoiceStackToggle}
+                style={{ padding: "5px 10px", background: "var(--accent)", border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
+              >
+                Confirm start
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setVoiceStackPending(true)}
+              disabled={voiceStackBusy !== null}
+              style={{
+                padding: "5px 12px", background: "none", border: "1px solid var(--border)", borderRadius: 5,
+                color: voiceStackBusy ? "var(--text-dim)" : "var(--text-muted)",
+                cursor: voiceStackBusy ? "not-allowed" : "pointer", fontSize: 11, flexShrink: 0,
+              }}
+            >
+              {voiceStackBusy === "starting" ? "Starting…" : "Start"}
+            </button>
+          )}
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500 }}>Voice</span>
+          <select
+            value={selectedVoice}
+            onChange={(e) => handleVoiceChange(e.target.value)}
+            disabled={voiceSaving || voiceOptions.length === 0}
+            style={{
+              padding: "6px 8px", fontSize: 12, fontFamily: "var(--font-mono)",
+              background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 5,
+              color: "var(--text)", cursor: voiceOptions.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >
+            {voiceOptions.length === 0 && (
+              <option value={selectedVoice}>{selectedVoice ? stripVoicePrefix(selectedVoice) : "(TTS server not running)"}</option>
+            )}
+            {voiceOptions.map((v) => (
+              <option key={v.id} value={v.id}>{stripVoicePrefix(v.id)}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </div>
+  );
+}
+
 // ── Provider icon ─────────────────────────────────────────────────────────────
 
 function ProviderIcon({ id, size }: { id: string; size: number }) {
@@ -1422,6 +1784,9 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       if (!p) return null;
       return <ApiKeyDetail key={p.id} provider={p} onRefresh={loadApiKeyProviders} />;
     }
+    if (selection.type === "local-models") {
+      return <LocalModelsDetail />;
+    }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
       if (!provider) return null;
@@ -1478,6 +1843,26 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
             display: "flex", flexDirection: "column", flexShrink: 0, background: "var(--bg-panel)",
           }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "8px 6px" }}>
+              {/* Local server */}
+              {(() => {
+                const isSelected = selection?.type === "local-models";
+                return (
+                  <div
+                    onClick={() => setSelection({ type: "local-models" })}
+                    style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 8px", borderRadius: 5, cursor: "pointer", background: isSelected ? "var(--bg-selected)" : "none" }}
+                    onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                    onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "none"; }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", flexShrink: 0 }}>
+                      <rect x="2" y="4" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="6" rx="2" />
+                      <line x1="6" y1="8" x2="6.01" y2="8" /><line x1="6" y1="17" x2="6.01" y2="17" />
+                    </svg>
+                    <span style={{ fontSize: 12, color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Local Server</span>
+                  </div>
+                );
+              })()}
+              <div style={{ margin: "4px 8px", borderTop: "1px solid var(--border)" }} />
+
               {/* Active OAuth subscriptions */}
               {activeOAuth.map((p) => {
                 const isSelected = selection?.type === "oauth" && selection.providerId === p.id;

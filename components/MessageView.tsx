@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState, useRef, useEffect, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
@@ -406,6 +406,121 @@ function AssistantMessageView({
     });
   };
 
+  const [playState, setPlayState] = useState<"idle" | "loading" | "playing">("idle");
+  const [playError, setPlayError] = useState<string | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const playSessionRef = useRef(0);
+
+  const speakChunkUrl = useCallback((chunkIndex: number) => (
+    `/api/sessions/${encodeURIComponent(sessionId!)}/entries/${encodeURIComponent(entryId!)}/speak/${chunkIndex}`
+  ), [sessionId, entryId]);
+
+  const speakFullUrl = useCallback(() => (
+    `/api/sessions/${encodeURIComponent(sessionId!)}/entries/${encodeURIComponent(entryId!)}/speak/full`
+  ), [sessionId, entryId]);
+
+  // Used when the voicemail-notify feature already generated the whole
+  // reply as one file (lib/speak.ts, getOrGenerateFullAudio) — play that
+  // directly instead of running Tier-1's separate chunked synthesis.
+  const playFullAudio = useCallback((mySession: number) => {
+    if (mySession !== playSessionRef.current) return;
+    const audio = new Audio(speakFullUrl());
+    audioElRef.current = audio;
+    audio.oncanplay = () => { if (mySession === playSessionRef.current) setPlayState("playing"); };
+    audio.onended = () => {
+      if (mySession !== playSessionRef.current) return;
+      setPlayState("idle");
+      audioElRef.current = null;
+    };
+    audio.onerror = () => {
+      if (mySession !== playSessionRef.current) return;
+      setPlayError("Playback failed");
+      setPlayState("idle");
+      audioElRef.current = null;
+    };
+    audio.play().catch(() => {
+      if (mySession === playSessionRef.current) {
+        setPlayError("Playback blocked");
+        setPlayState("idle");
+      }
+    });
+  }, [speakFullUrl]);
+
+  const playChunk = useCallback((chunkIndex: number, totalChunks: number, mySession: number) => {
+    if (mySession !== playSessionRef.current) return;
+    const audio = new Audio(speakChunkUrl(chunkIndex));
+    audioElRef.current = audio;
+    audio.oncanplay = () => { if (mySession === playSessionRef.current) setPlayState("playing"); };
+    audio.onended = () => {
+      if (mySession !== playSessionRef.current) return;
+      const next = chunkIndex + 1;
+      if (next < totalChunks) {
+        playChunk(next, totalChunks, mySession);
+      } else {
+        setPlayState("idle");
+        audioElRef.current = null;
+      }
+    };
+    audio.onerror = () => {
+      if (mySession !== playSessionRef.current) return;
+      setPlayError("Playback failed");
+      setPlayState("idle");
+      audioElRef.current = null;
+    };
+    audio.play().catch(() => {
+      if (mySession === playSessionRef.current) {
+        setPlayError("Playback blocked");
+        setPlayState("idle");
+      }
+    });
+    // Prefetch the next chunk in the background so it's server-cached (and
+    // ideally already fully generated) by the time this one finishes.
+    const next = chunkIndex + 1;
+    if (next < totalChunks) {
+      fetch(speakChunkUrl(next)).catch(() => {});
+    }
+  }, [speakChunkUrl]);
+
+  const handlePlayClick = useCallback(async () => {
+    if (playState === "playing" || playState === "loading") {
+      playSessionRef.current++;
+      audioElRef.current?.pause();
+      audioElRef.current = null;
+      setPlayState("idle");
+      return;
+    }
+    if (!sessionId || !entryId) return;
+    setPlayError(null);
+    setPlayState("loading");
+    const mySession = ++playSessionRef.current;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/speak`);
+      const data = await res.json() as { chunkCount?: number; fullAudioReady?: boolean; error?: string };
+      if (mySession !== playSessionRef.current) return;
+      if (!res.ok || data.error || !data.chunkCount) {
+        setPlayError(data.error ?? "No audio available");
+        setPlayState("idle");
+        return;
+      }
+      if (data.fullAudioReady) {
+        playFullAudio(mySession);
+      } else {
+        playChunk(0, data.chunkCount, mySession);
+      }
+    } catch (e) {
+      if (mySession !== playSessionRef.current) return;
+      setPlayError(String(e));
+      setPlayState("idle");
+    }
+  }, [playState, sessionId, entryId, playChunk, playFullAudio]);
+
+  useEffect(() => {
+    return () => {
+      playSessionRef.current++;
+      audioElRef.current?.pause();
+    };
+  }, []);
+
   useEffect(() => {
     if (!isStreaming) {
       // Finalise any un-finished thinking block durations on stream end
@@ -564,6 +679,42 @@ function AssistantMessageView({
               </svg>
             )}
             {copied ? "Copied" : "Copy"}
+          </button>
+        )}
+        {textContent && !isStreaming && sessionId && entryId && (
+          <button
+            onClick={handlePlayClick}
+            title={playState === "idle" ? "Read reply aloud" : "Stop"}
+            style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "3px 8px", height: 22,
+              background: "none", border: "none",
+              borderRadius: 5,
+              color: playError ? "#ef4444" : (playState !== "idle" ? "var(--accent)" : "var(--text-dim)"),
+              cursor: "pointer",
+              fontSize: 11, fontWeight: 400,
+              whiteSpace: "nowrap",
+              opacity: hovered || playState !== "idle" ? 1 : 0,
+              pointerEvents: hovered || playState !== "idle" ? "auto" : "none",
+              transition: "opacity 0.12s, color 0.12s",
+            }}
+            onMouseEnter={(e) => { if (playState === "idle" && !playError) e.currentTarget.style.color = "var(--accent)"; }}
+            onMouseLeave={(e) => { if (playState === "idle" && !playError) e.currentTarget.style.color = "var(--text-dim)"; }}
+          >
+            {playState === "loading" ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
+                <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+              </svg>
+            ) : playState === "playing" ? (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <rect x="6" y="6" width="12" height="12" rx="1.5" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="6 4 20 12 6 20 6 4" />
+              </svg>
+            )}
+            {playError ?? (playState === "loading" ? "Loading" : playState === "playing" ? "Stop" : "Read")}
           </button>
         )}
         {time && !isStreaming && (
