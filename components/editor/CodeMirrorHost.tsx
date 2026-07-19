@@ -8,6 +8,7 @@ export interface CodeMirrorHostProps {
   doc: string;
   extensions: Extension[];
   onReady?: (view: EditorView) => void;
+  onDestroy?: () => void;
   onDocChange?: (doc: string, view: EditorView) => void;
   className?: string;
   style?: CSSProperties;
@@ -24,6 +25,7 @@ export function CodeMirrorHost({
   doc,
   extensions,
   onReady,
+  onDestroy,
   onDocChange,
   className,
   style,
@@ -52,6 +54,7 @@ export function CodeMirrorHost({
     return () => {
       viewRef.current = null;
       view.destroy();
+      onDestroy?.();
     };
     // Intentionally empty deps — create once per mount. Callers key this
     // component by document identity to force a remount instead.

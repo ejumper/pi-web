@@ -65,6 +65,8 @@ export interface ChatInputHandle {
   insertIfEmpty: (text: string) => void;
   prependText: (text: string) => void;
   addImages: (files: File[]) => void;
+  focus: () => void;
+  getTextareaEl: () => HTMLTextAreaElement | null;
 }
 
 const TOOL_PRESETS = ["off", "default", "full"] as const;
@@ -321,6 +323,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     },
     addImages(files: File[]) {
       processImageFiles(files);
+    },
+    focus() {
+      textareaRef.current?.focus();
+    },
+    getTextareaEl() {
+      return textareaRef.current;
     },
   }));
 

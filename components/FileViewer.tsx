@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import type { EditorView } from "@codemirror/view";
 import { useTheme } from "@/hooks/useTheme";
@@ -25,6 +25,7 @@ interface Props {
   sourceSessionId?: string | null;
   onOpenFile?: (filePath: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onEditorViewChange?: (view: EditorView | null) => void;
 }
 
 interface FileData {
@@ -692,7 +693,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
   );
 }
 
-export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange }: Props) {
+export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange, onEditorViewChange }: Props) {
   if (isImagePath(filePath)) {
     return <ImageViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
@@ -702,12 +703,21 @@ export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirty
   if (isDocumentPreviewPath(filePath)) {
     return <DocumentViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
-  return <TextFileViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} onOpenFile={onOpenFile} onDirtyChange={onDirtyChange} />;
+  return (
+    <TextFileViewer
+      filePath={filePath}
+      cwd={cwd}
+      sourceSessionId={sourceSessionId}
+      onOpenFile={onOpenFile}
+      onDirtyChange={onDirtyChange}
+      onEditorViewChange={onEditorViewChange}
+    />
+  );
 }
 
 type ConflictInfo = { source: "watch" | "save"; diskMtime: string };
 
-function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange }: Props) {
+function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange, onEditorViewChange }: Props) {
   const { isDark } = useTheme();
   const [data, setData] = useState<FileData | null>(null);
   const [prevContent, setPrevContent] = useState<string | null>(null);
@@ -715,7 +725,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const [error, setError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
   const [viewMode, setViewMode] = useState<"source" | "diff">("source");
-  const [wrapLines, setWrapLines] = useState(false);
+  const [wrapLines, setWrapLines] = useState(true);
   const [watching, setWatching] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
   const [dirty, setDirty] = useState(false);
@@ -827,7 +837,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     setPrevContent(null);
     setPreviewMode(false);
     setViewMode("source");
-    setWrapLines(false);
+    setWrapLines(true);
     setChangeCount(0);
     setWatching(false);
     setDirty(false);
@@ -842,9 +852,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
       esRef.current = null;
     }
 
-    fetchContent(filePath).then((d) => {
-      if (d?.language === "markdown") setPreviewMode(true);
-    }).finally(() => setLoading(false));
+    fetchContent(filePath).finally(() => setLoading(false));
 
     // Set up SSE watch
     const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
@@ -909,6 +917,40 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     [],
   );
 
+  // Responsive status bar: progressively hide the least-important info
+  // (file type, then line count, then size, then the live indicator) only as
+  // far as needed to keep the actionable toggle/save buttons from being
+  // squeezed — never further than that. Always re-searches from "show
+  // everything" on any relevant change rather than incrementally growing
+  // back, which avoids oscillating at the exact boundary width.
+  const statusBarRef = useRef<HTMLDivElement>(null);
+  const [statusBarHideCount, setStatusBarHideCount] = useState(0);
+  const statusBarContentKey = [
+    filePath, data?.language, data?.content.length, data?.size,
+    watching, dirty, saveState, prevContent !== null && prevContent !== data?.content,
+    viewMode, wrapLines, previewMode,
+  ].join("|");
+
+  useLayoutEffect(() => {
+    setStatusBarHideCount(0);
+  }, [statusBarContentKey]);
+
+  useLayoutEffect(() => {
+    const el = statusBarRef.current;
+    if (!el) return;
+    if (el.scrollWidth > el.clientWidth && statusBarHideCount < 4) {
+      setStatusBarHideCount((c) => c + 1);
+    }
+  }, [statusBarHideCount, statusBarContentKey]);
+
+  useEffect(() => {
+    const el = statusBarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setStatusBarHideCount(0));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   if (loading) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 13 }}>
@@ -937,6 +979,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* Status bar */}
       <div
+        ref={statusBarRef}
         style={{
           display: "flex",
           alignItems: "center",
@@ -947,32 +990,38 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           color: "var(--text-dim)",
           background: "var(--bg)",
           flexShrink: 0,
+          overflow: "hidden",
         }}
       >
-        <span style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
+        <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
           {getRelativeFilePath(filePath, cwd)}
         </span>
-        <span style={{ marginLeft: "auto" }}>{data.language}</span>
-        {viewMode === "source" && <span>{lines.length} lines</span>}
-        <span>{formatSize(data.size)}</span>
+        {/* Always-present divider — pushes everything after it to the right,
+            regardless of which of the info items below are currently hidden. */}
+        <span style={{ marginLeft: "auto", flexShrink: 0 }} />
+        {statusBarHideCount < 1 && <span style={{ flexShrink: 0 }}>{data.language}</span>}
+        {statusBarHideCount < 2 && viewMode === "source" && <span style={{ flexShrink: 0 }}>{lines.length} lines</span>}
+        {statusBarHideCount < 3 && <span style={{ flexShrink: 0 }}>{formatSize(data.size)}</span>}
 
         {/* Live watch indicator */}
-        <span
-          title={watching ? "Live sync active" : "Not watching"}
-          style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)" }}
-        >
+        {statusBarHideCount < 4 && (
           <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: watching ? "#4ade80" : "var(--border)",
-              display: "inline-block",
-              boxShadow: watching ? "0 0 4px #4ade80" : "none",
-            }}
-          />
-          {watching ? "live" : "static"}
-        </span>
+            title={watching ? "Live sync active" : "Not watching"}
+            style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)", flexShrink: 0 }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: watching ? "#4ade80" : "var(--border)",
+                display: "inline-block",
+                boxShadow: watching ? "0 0 4px #4ade80" : "none",
+              }}
+            />
+            {watching ? "live" : "static"}
+          </span>
+        )}
 
         {/* Unsaved-changes indicator */}
         {dirty && (
@@ -992,20 +1041,21 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             background: "var(--bg-hover)",
             color: dirty ? "var(--text)" : "var(--text-dim)",
             border: "1px solid var(--border)", borderRadius: 5,
+            flexShrink: 0,
             opacity: !dirty || saveState === "saving" ? 0.6 : 1,
           }}
         >
           {saveState === "saving" ? "Saving…" : "Save"}
         </button>
         {saveState === "error" && saveError && (
-          <span style={{ color: "#f87171", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
+          <span style={{ color: "#f87171", maxWidth: 160, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
             {saveError}
           </span>
         )}
 
         {/* Diff / Source toggle — shown only when there are changes */}
         {hasDiff && (
-          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
             <button
               onClick={() => setViewMode("source")}
               style={{
@@ -1041,6 +1091,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               background: wrapLines ? "var(--bg-selected)" : "var(--bg-hover)",
               color: wrapLines ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
+              flexShrink: 0,
               fontWeight: wrapLines ? 600 : 400,
             }}
           >
@@ -1050,7 +1101,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
 
         {/* HTML source/preview toggle */}
         {isHtml && viewMode === "source" && (
-          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
             <button
               onClick={() => setPreviewMode(false)}
               style={{
@@ -1078,7 +1129,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
 
         {/* Markdown preview/raw toggle */}
         {isMarkdown && viewMode === "source" && (
-          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
             <button
               onClick={() => setPreviewMode(true)}
               style={{
@@ -1197,12 +1248,17 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             extensions={editorExtensions}
             onReady={(view) => {
               viewRef.current = view;
+              onEditorViewChange?.(view);
               const pending = loadLanguageForFile(filePath);
               pending?.then((ext) => {
                 if (viewRef.current === view) {
                   view.dispatch({ effects: compartmentsRef.current.language.reconfigure(ext) });
                 }
               }).catch(() => { /* no highlighting for this file type, non-fatal */ });
+            }}
+            onDestroy={() => {
+              viewRef.current = null;
+              onEditorViewChange?.(null);
             }}
             onDocChange={(docString) => {
               latestDocRef.current = docString;

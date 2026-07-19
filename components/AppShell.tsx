@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { EditorView } from "@codemirror/view";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
@@ -173,6 +174,11 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // Live CM6 view per open tab (only present while that tab's editor is
+  // mounted, i.e. open and in Raw/source view) — keyed by tab id since every
+  // open tab stays mounted simultaneously. Imperative-only (ref, not state):
+  // only read at keypress time, never needs to trigger a re-render.
+  const editorViewsRef = useRef<Map<string, EditorView>>(new Map());
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -262,12 +268,6 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
   }, [router, isMobile]);
-
-  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
-  useGlobalKeyboardShortcuts({
-    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
-    activeCwd,
-  });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectRoot, which the same-project check in
@@ -384,6 +384,27 @@ export function AppShell() {
   const handleFileDirtyChange = useCallback((tabId: string, dirty: boolean) => {
     setFileTabs((prev) => prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t)));
   }, []);
+
+  const handleEditorViewChange = useCallback((tabId: string, view: EditorView | null) => {
+    if (view) editorViewsRef.current.set(tabId, view);
+    else editorViewsRef.current.delete(tabId);
+  }, []);
+
+  const getActiveEditorView = useCallback(() => {
+    // The right panel stays mounted (CSS-animated) even when "closed", so a
+    // tab's editor view can still exist here while genuinely invisible —
+    // gate on rightPanelOpen too, or Ctrl+I would focus an off-screen editor.
+    if (!rightPanelOpen || !activeFileTabId) return undefined;
+    return editorViewsRef.current.get(activeFileTabId);
+  }, [activeFileTabId, rightPanelOpen]);
+
+  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N, Ctrl/Cmd+I etc.)
+  useGlobalKeyboardShortcuts({
+    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
+    activeCwd,
+    chatInputRef,
+    getActiveEditorView,
+  });
 
   // Warn before closing/reloading the browser tab while any file has unsaved edits.
   useEffect(() => {
@@ -1170,6 +1191,7 @@ export function AppShell() {
                   tab.sourceSessionId,
                 )}
                 onDirtyChange={(dirty) => handleFileDirtyChange(tab.id, dirty)}
+                onEditorViewChange={(view) => handleEditorViewChange(tab.id, view)}
               />
             </div>
           ))}
