@@ -5,7 +5,7 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUi
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { MessageView } from "./MessageView";
-import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { ChatInput, type ChatInputHandle, type AttachedImage } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
@@ -34,6 +34,11 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  hasOpenFile?: boolean;
+  fileIncluded?: boolean;
+  onToggleFileIncluded?: () => void;
+  /** Ready "@path " text to silently prepend to the next outgoing prompt, or null. */
+  pendingFileMention?: string | null;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -140,7 +145,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, hasOpenFile, fileIncluded, onToggleFileIncluded, pendingFileMention }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -203,6 +208,27 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   });
   latestMessagesRef.current = messages;
   latestEntryIdsRef.current = entryIds;
+
+  // Silently prepend the active file's @mention to whatever's actually being
+  // sent (never to an empty/image-only send with no typed text), so it rides
+  // along on every send path the same way a manually-typed @mention would.
+  const withFileMention = useCallback((message: string, images?: AttachedImage[]) => (
+    pendingFileMention && (message.trim().length > 0 || !!images?.length)
+      ? `${pendingFileMention}${message}`
+      : message
+  ), [pendingFileMention]);
+  const sendWithMention = useCallback((message: string, images?: AttachedImage[]) => (
+    handleSend(withFileMention(message, images), images)
+  ), [handleSend, withFileMention]);
+  const steerWithMention = useCallback((message: string, images?: AttachedImage[]) => (
+    handleSteer(withFileMention(message, images), images)
+  ), [handleSteer, withFileMention]);
+  const followUpWithMention = useCallback((message: string, images?: AttachedImage[]) => (
+    handleFollowUp(withFileMention(message, images), images)
+  ), [handleFollowUp, withFileMention]);
+  const promptWithStreamingBehaviorAndMention = useCallback((message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => (
+    handlePromptWithStreamingBehavior(withFileMention(message, images), behavior, images)
+  ), [handlePromptWithStreamingBehavior, withFileMention]);
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
@@ -307,11 +333,11 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
-      onSend={handleSend}
+      onSend={sendWithMention}
       onAbort={handleAbort}
-      onSteer={agentRunning ? handleSteer : undefined}
-      onFollowUp={agentRunning ? handleFollowUp : undefined}
-      onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
+      onSteer={agentRunning ? steerWithMention : undefined}
+      onFollowUp={agentRunning ? followUpWithMention : undefined}
+      onPromptWithStreamingBehavior={agentRunning ? promptWithStreamingBehaviorAndMention : undefined}
       isStreaming={agentRunning}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
@@ -339,6 +365,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       soundEnabled={soundEnabled}
       onSoundToggle={onSoundToggle}
       onAudioUnlock={unlockAudio}
+      hasOpenFile={hasOpenFile}
+      fileIncluded={fileIncluded}
+      onToggleFileIncluded={onToggleFileIncluded}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
       cwd={session?.cwd ?? newSessionCwd}
     />

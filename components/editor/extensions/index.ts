@@ -60,6 +60,11 @@ export function buildTextEditorExtensions(opts: BuildTextEditorExtensionsOptions
     opts.compartments.highlight.of(getSyntaxHighlightExtension(opts.isDark)),
     opts.compartments.wrap.of(wrapExtension(opts.wrapEnabled)),
     piEditorTheme(),
+    // A couple of lines' worth of padding around the cursor's keep-in-view
+    // calculation, so on mobile (where the on-screen keyboard eats the
+    // bottom of the viewport) the caret doesn't end up scrolled flush
+    // against the keyboard's top edge.
+    EditorView.scrollMargins.of(() => ({ top: 44, bottom: 44 })),
     keymap.of([
       {
         key: "Mod-s",

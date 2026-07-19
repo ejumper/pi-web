@@ -55,6 +55,9 @@ interface Props {
   soundEnabled?: boolean;
   onSoundToggle?: () => void;
   onAudioUnlock?: () => void;
+  hasOpenFile?: boolean;
+  fileIncluded?: boolean;
+  onToggleFileIncluded?: () => void;
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
@@ -210,6 +213,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   onBuiltinCommand,
   soundEnabled, onSoundToggle, onAudioUnlock,
+  hasOpenFile, fileIncluded, onToggleFileIncluded,
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
@@ -2063,6 +2067,50 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
                 </svg>
                 Stop
+              </button>
+            )}
+
+            {hasOpenFile && onToggleFileIncluded && (
+              <button
+                onClick={onToggleFileIncluded}
+                title={fileIncluded ? "Excluding open file from next prompt" : "Including open file with next prompt"}
+                aria-label={fileIncluded ? "Exclude open file from next prompt" : "Include open file with next prompt"}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: fileIncluded ? "var(--text-muted)" : "var(--text-dim)",
+                  cursor: "pointer",
+                  opacity: fileIncluded ? 1 : 0.55,
+                  transition: "background 0.12s, color 0.12s, opacity 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
+                  e.currentTarget.style.opacity = "1";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = fileIncluded ? "var(--text-muted)" : "var(--text-dim)";
+                  e.currentTarget.style.opacity = fileIncluded ? "1" : "0.55";
+                }}
+              >
+                {fileIncluded ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="5" y1="21" x2="19" y2="3" />
+                  </svg>
+                )}
               </button>
             )}
 

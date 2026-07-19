@@ -5,6 +5,7 @@ import type { EditorView } from "@codemirror/view";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
+import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
@@ -16,7 +17,7 @@ import { BranchNavigator } from "./BranchNavigator";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
-import { getFileName } from "@/lib/file-paths";
+import { getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -53,6 +54,7 @@ export function AppShell() {
   const topBarRef = useRef<HTMLDivElement>(null);
   const sidebarContainerRef = useRef<HTMLDivElement>(null);
   const rightPanelContainerRef = useRef<HTMLDivElement>(null);
+  const fileTabBarRef = useRef<HTMLDivElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -353,7 +355,7 @@ export function AppShell() {
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => {
       const existing = prev.find((t) => t.id === tabId);
-      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId }];
+      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId, included: true }];
       if (!sourceSessionId || existing.sourceSessionId === sourceSessionId) return prev;
       return prev.map((t) => t.id === tabId ? { ...t, sourceSessionId } : t);
     });
@@ -388,6 +390,22 @@ export function AppShell() {
     setFileTabs((prev) => prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t)));
   }, []);
 
+  const handleToggleFileIncluded = useCallback(() => {
+    setFileTabs((prev) => prev.map((t) => (
+      t.id === activeFileTabId ? { ...t, included: !(t.included ?? true) } : t
+    )));
+  }, [activeFileTabId]);
+
+  // The active editor tab, if any, and (when its "include" toggle is on) the
+  // ready-made @mention text to silently prepend to the next chat prompt —
+  // same format/mechanism as the manual @ button, just automatic. Available
+  // regardless of whether the right file panel itself is open.
+  const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
+  const activeFileIncluded = activeFileTab?.included ?? true;
+  const pendingFileMention = (activeFileTab && activeFileIncluded)
+    ? buildAtMentionText(getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined), false)
+    : null;
+
   // A moved file/dir shouldn't leave any open tab pointing at a now-stale
   // path. Patches filePath/label in place for an exact match (the moved
   // file itself) or a path-prefix match (a descendant of a moved dir) —
@@ -418,6 +436,10 @@ export function AppShell() {
     sidebarRef: sidebarContainerRef,
     rightPanelRef: rightPanelContainerRef,
   });
+
+  // Keeps the file tab bar visually pinned to the top of the screen when the
+  // on-screen keyboard opens — see hooks/useKeyboardAvoidPin.ts.
+  useKeyboardAvoidPin(fileTabBarRef, isMobile);
 
   const handleEditorViewChange = useCallback((tabId: string, view: EditorView | null) => {
     if (view) editorViewsRef.current.set(tabId, view);
@@ -1157,6 +1179,10 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
+              hasOpenFile={!!activeFileTab}
+              fileIncluded={activeFileIncluded}
+              onToggleFileIncluded={handleToggleFileIncluded}
+              pendingFileMention={pendingFileMention}
             />
           ) : showPlaceholder ? (
             activeCwd ? (
@@ -1193,7 +1219,7 @@ export function AppShell() {
         }}
       >
         {/* Right panel tab bar */}
-        <div style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
+        <div ref={fileTabBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
               tabs={fileTabs}

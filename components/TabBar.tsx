@@ -9,6 +9,8 @@ export interface Tab {
   filePath: string;
   sourceSessionId?: string | null;
   dirty?: boolean;
+  /** Whether this file is auto-@mentioned with the next chat prompt. Default: true. */
+  included?: boolean;
 }
 
 interface Props {

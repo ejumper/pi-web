@@ -6,6 +6,7 @@ import type { EditorView } from "@codemirror/view";
 import { undo, redo, undoDepth, redoDepth } from "@codemirror/commands";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
 import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
 import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
 import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
@@ -975,6 +976,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   // everything" on any relevant change rather than incrementally growing
   // back, which avoids oscillating at the exact boundary width.
   const statusBarRef = useRef<HTMLDivElement>(null);
+  useKeyboardAvoidPin(statusBarRef, isMobile);
   const [statusBarHideCount, setStatusBarHideCount] = useState(0);
   const statusBarContentKey = [
     filePath, data?.language, data?.content.length, data?.size,
