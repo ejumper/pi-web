@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { EditorView } from "@codemirror/view";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
@@ -50,6 +51,8 @@ export function AppShell() {
   }, []);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const sidebarContainerRef = useRef<HTMLDivElement>(null);
+  const rightPanelContainerRef = useRef<HTMLDivElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -385,6 +388,37 @@ export function AppShell() {
     setFileTabs((prev) => prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t)));
   }, []);
 
+  // A moved file/dir shouldn't leave any open tab pointing at a now-stale
+  // path. Patches filePath/label in place for an exact match (the moved
+  // file itself) or a path-prefix match (a descendant of a moved dir) —
+  // deliberately never touches id or dirty, so the tab's identity/selection
+  // and any unsaved edits survive the patch untouched.
+  const handleFileMoved = useCallback((oldPath: string, newPath: string) => {
+    setFileTabs((prev) => prev.map((t) => {
+      if (t.filePath === oldPath) {
+        return { ...t, filePath: newPath, label: getFileName(newPath) };
+      }
+      if (t.filePath.startsWith(oldPath + "/")) {
+        const updatedPath = newPath + t.filePath.slice(oldPath.length);
+        return { ...t, filePath: updatedPath, label: getFileName(updatedPath) };
+      }
+      return t;
+    }));
+  }, []);
+
+  // Mobile swipe-to-open/close for the sidebar and right file panel — same
+  // ~20px edge-zone rule in both directions (open from the near edge, close
+  // from the far edge), see hooks/useEdgeSwipe.ts.
+  useEdgeSwipe({
+    enabled: isMobile,
+    sidebarOpen,
+    onSidebarOpenChange: setSidebarOpen,
+    rightPanelOpen,
+    onRightPanelOpenChange: setRightPanelOpen,
+    sidebarRef: sidebarContainerRef,
+    rightPanelRef: rightPanelContainerRef,
+  });
+
   const handleEditorViewChange = useCallback((tabId: string, view: EditorView | null) => {
     if (view) editorViewsRef.current.set(tabId, view);
     else editorViewsRef.current.delete(tabId);
@@ -449,6 +483,7 @@ export function AppShell() {
         explorerRefreshKey={explorerRefreshKey}
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
+        onFileMoved={handleFileMoved}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
@@ -606,6 +641,7 @@ export function AppShell() {
 
       {/* Left sidebar */}
       <div
+        ref={sidebarContainerRef}
         className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
         style={{
           background: "var(--bg-panel)",
@@ -1147,6 +1183,7 @@ export function AppShell() {
 
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div
+        ref={rightPanelContainerRef}
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
         style={{
           display: "flex",

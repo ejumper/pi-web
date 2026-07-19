@@ -3,7 +3,9 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import type { EditorView } from "@codemirror/view";
+import { undo, redo, undoDepth, redoDepth } from "@codemirror/commands";
 import { useTheme } from "@/hooks/useTheme";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
 import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
 import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
@@ -719,6 +721,7 @@ type ConflictInfo = { source: "watch" | "save"; diskMtime: string };
 
 function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange, onEditorViewChange }: Props) {
   const { isDark } = useTheme();
+  const isMobile = useIsMobile();
   const [data, setData] = useState<FileData | null>(null);
   const [prevContent, setPrevContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -732,6 +735,8 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const latestDocRef = useRef<string>("");
@@ -829,33 +834,16 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
       });
   }, [filePath, sourceSessionId]);
 
-  // Initial load + SSE watch setup
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setPrevContent(null);
-    setPreviewMode(false);
-    setViewMode("source");
-    setWrapLines(true);
-    setChangeCount(0);
-    setWatching(false);
-    setDirty(false);
-    setSaveState("idle");
-    setSaveError(null);
-    setConflict(null);
-    dirtyRef.current = false;
-    lastSavedMtimeRef.current = null;
-
+  // Opens (or re-opens) the SSE watch connection for a given path. Shared by
+  // the mount effect and the reconnect effect below so the connected/change/
+  // error wiring isn't duplicated between them.
+  const setupWatch = useCallback((watchFilePath: string) => {
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
     }
 
-    fetchContent(filePath).finally(() => setLoading(false));
-
-    // Set up SSE watch
-    const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
+    const es = new EventSource(getFileApiUrl(watchFilePath, "watch", sourceSessionId));
     esRef.current = es;
 
     es.addEventListener("connected", () => {
@@ -872,7 +860,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
         setConflict({ source: "watch", diskMtime: mtime ?? "" });
         return;
       }
-      fetchContent(filePath, true);
+      fetchContent(watchFilePath, true);
     });
 
     es.addEventListener("error", () => {
@@ -882,12 +870,61 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     es.onerror = () => {
       setWatching(false);
     };
+  }, [fetchContent, sourceSessionId]);
+
+  // Initial load + first SSE watch connection — runs exactly once per tab's
+  // lifetime (this component instance lives for the whole tab, never
+  // remounted on tab switch), using whatever filePath/sourceSessionId were
+  // current at that first render.
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setData(null);
+    setPrevContent(null);
+    setPreviewMode(false);
+    setViewMode("source");
+    setWrapLines(true);
+    setChangeCount(0);
+    setWatching(false);
+    setDirty(false);
+    setSaveState("idle");
+    setSaveError(null);
+    setConflict(null);
+    setCanUndo(false);
+    setCanRedo(false);
+    dirtyRef.current = false;
+    lastSavedMtimeRef.current = null;
+
+    fetchContent(filePath).finally(() => setLoading(false));
+    setupWatch(filePath);
 
     return () => {
-      es.close();
-      esRef.current = null;
+      if (esRef.current) {
+        esRef.current.close();
+        esRef.current = null;
+      }
     };
-  }, [filePath, fetchContent, sourceSessionId]);
+    // Deliberately empty — this is a one-time initializer, not a reaction to
+    // filePath/sourceSessionId changes (see the reconnect effect below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Re-points the watch connection when filePath/sourceSessionId change
+  // *after* mount — which today only happens when a drag-and-drop move
+  // patches this tab's path (see AppShell's handleFileMoved). Deliberately
+  // does NOT reset data/dirty/the edit buffer: a move preserves the file's
+  // content and mtime, so nothing there is stale, only which path the watch
+  // connection (and future save/read calls, which already read the current
+  // filePath prop) should be pointed at. Skips its own first run since the
+  // mount effect above already opened the initial connection.
+  const isFirstReconnectRun = useRef(true);
+  useEffect(() => {
+    if (isFirstReconnectRun.current) {
+      isFirstReconnectRun.current = false;
+      return;
+    }
+    setupWatch(filePath);
+  }, [filePath, setupWatch]);
 
   // Reconfigure the wrap compartment when the toggle changes (initial value
   // is already baked into the extensions built for CodeMirrorHost's mount).
@@ -903,6 +940,20 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
+
+  const handleUndo = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    undo(view);
+    view.focus();
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    redo(view);
+    view.focus();
+  }, []);
 
   const editorExtensions = useMemo(
     () => buildTextEditorExtensions({
@@ -993,18 +1044,22 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           overflow: "hidden",
         }}
       >
-        <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
-        </span>
+        {/* File path — already shown on the tab, so it's redundant on mobile
+            where space is at a premium. */}
+        {!isMobile && (
+          <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
+            {getRelativeFilePath(filePath, cwd)}
+          </span>
+        )}
         {/* Always-present divider — pushes everything after it to the right,
             regardless of which of the info items below are currently hidden. */}
         <span style={{ marginLeft: "auto", flexShrink: 0 }} />
         {statusBarHideCount < 1 && <span style={{ flexShrink: 0 }}>{data.language}</span>}
-        {statusBarHideCount < 2 && viewMode === "source" && <span style={{ flexShrink: 0 }}>{lines.length} lines</span>}
-        {statusBarHideCount < 3 && <span style={{ flexShrink: 0 }}>{formatSize(data.size)}</span>}
+        {!isMobile && statusBarHideCount < 2 && viewMode === "source" && <span style={{ flexShrink: 0 }}>{lines.length} lines</span>}
+        {!isMobile && statusBarHideCount < 3 && <span style={{ flexShrink: 0 }}>{formatSize(data.size)}</span>}
 
-        {/* Live watch indicator */}
-        {statusBarHideCount < 4 && (
+        {/* Live watch indicator — mobile always shows just the dot, no label */}
+        {(isMobile || statusBarHideCount < 4) && (
           <span
             title={watching ? "Live sync active" : "Not watching"}
             style={{ display: "flex", alignItems: "center", gap: 4, color: watching ? "#4ade80" : "var(--text-dim)", flexShrink: 0 }}
@@ -1019,7 +1074,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
                 boxShadow: watching ? "0 0 4px #4ade80" : "none",
               }}
             />
-            {watching ? "live" : "static"}
+            {!isMobile && (watching ? "live" : "static")}
           </span>
         )}
 
@@ -1051,6 +1106,50 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           <span style={{ color: "#f87171", maxWidth: 160, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
             {saveError}
           </span>
+        )}
+
+        {/* Undo/redo — mobile only; desktop already has Ctrl/Cmd+Z/Y */}
+        {isMobile && viewMode === "source" && !previewMode && (
+          <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+            <button
+              onClick={handleUndo}
+              disabled={!canUndo}
+              title="Undo"
+              aria-label="Undo"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                height: 20, width: 20, padding: 0,
+                background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 4,
+                color: canUndo ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: canUndo ? "pointer" : "default",
+                opacity: canUndo ? 1 : 0.5,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 14 4 9 9 4" />
+                <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+              </svg>
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={!canRedo}
+              title="Redo"
+              aria-label="Redo"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                height: 20, width: 20, padding: 0,
+                background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 4,
+                color: canRedo ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: canRedo ? "pointer" : "default",
+                opacity: canRedo ? 1 : 0.5,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 14 20 9 15 4" />
+                <path d="M4 20v-7a4 4 0 0 1 4-4h12" />
+              </svg>
+            </button>
+          </div>
         )}
 
         {/* Diff / Source toggle — shown only when there are changes */}
@@ -1127,32 +1226,22 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           </div>
         )}
 
-        {/* Markdown preview/raw toggle */}
+        {/* Markdown edit/preview toggle — single button, exactly like wrap */}
         {isMarkdown && viewMode === "source" && (
-          <div style={{ display: "flex", borderRadius: 5, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
-            <button
-              onClick={() => setPreviewMode(true)}
-              style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
-                background: previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
-                color: previewMode ? "var(--text)" : "var(--text-muted)",
-                fontWeight: previewMode ? 600 : 400,
-              }}
-            >
-              Preview
-            </button>
-            <button
-              onClick={() => setPreviewMode(false)}
-              style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
-                background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
-                color: !previewMode ? "var(--text)" : "var(--text-muted)",
-                fontWeight: !previewMode ? 600 : 400,
-              }}
-            >
-              Raw
-            </button>
-          </div>
+          <button
+            onClick={() => setPreviewMode((v) => !v)}
+            title={previewMode ? "Switch to raw/edit view" : "Switch to preview"}
+            style={{
+              padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
+              color: !previewMode ? "var(--text)" : "var(--text-muted)",
+              border: "1px solid var(--border)", borderRadius: 5,
+              flexShrink: 0,
+              fontWeight: !previewMode ? 600 : 400,
+            }}
+          >
+            Edit
+          </button>
         )}
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </div>
@@ -1265,6 +1354,11 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
                 dirtyRef.current = true;
                 setDirty(true);
+              }
+              const view = viewRef.current;
+              if (view) {
+                setCanUndo(undoDepth(view.state) > 0);
+                setCanRedo(redoDepth(view.state) > 0);
               }
             }}
           />
