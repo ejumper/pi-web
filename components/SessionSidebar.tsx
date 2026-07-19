@@ -26,6 +26,7 @@ interface Props {
   explorerRefreshKey?: number;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
+  onFileMoved?: (oldPath: string, newPath: string) => void;
 }
 
 interface WorktreeEntry {
@@ -388,7 +389,7 @@ function PiAgentTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions, onFileMoved }: Props) {
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1726,6 +1727,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 onAtMention={onAtMention}
                 onAtMentions={onAtMentions}
                 onUploadBusyChange={setExplorerUploadBusy}
+                onFileMoved={onFileMoved}
               />
             </div>
           )}

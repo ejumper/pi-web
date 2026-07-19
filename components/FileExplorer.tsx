@@ -2,7 +2,7 @@
 
 import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import { getFileIcon, FolderIcon } from "./FileIcons";
-import { encodeFilePathForApi, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
+import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
 
 interface FileEntry {
   name: string;
@@ -27,6 +27,21 @@ interface Props {
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
   onUploadBusyChange?: (busy: boolean) => void;
+  onFileMoved?: (oldPath: string, newPath: string) => void;
+}
+
+interface DraggedNode {
+  fullPath: string;
+  isDir: boolean;
+}
+
+/** Client-side check purely for live drag UI feedback — the server independently re-validates every guard here regardless. */
+function isValidDropTarget(dragged: DraggedNode, targetDir: FileNode): boolean {
+  if (!targetDir.isDir) return false;
+  if (dragged.fullPath === targetDir.fullPath) return false; // dropping onto itself
+  if (dragged.isDir && targetDir.fullPath.startsWith(dragged.fullPath + "/")) return false; // into own descendant
+  if (getFileDirectory(dragged.fullPath) === targetDir.fullPath) return false; // already there
+  return true;
 }
 
 export interface FileExplorerHandle {
@@ -161,6 +176,12 @@ function TreeNode({
   refreshToken,
   highlightedPaths,
   onDeleted,
+  draggedNode,
+  onDragStartNode,
+  onDragEndGlobal,
+  dropTargetPath,
+  onSetDropTarget,
+  onMoveRequested,
 }: {
   node: FileNode;
   depth: number;
@@ -172,6 +193,12 @@ function TreeNode({
   refreshToken: string;
   highlightedPaths: Set<string>;
   onDeleted?: () => void;
+  draggedNode: DraggedNode | null;
+  onDragStartNode: (node: DraggedNode) => void;
+  onDragEndGlobal: () => void;
+  dropTargetPath: string | null;
+  onSetDropTarget: (path: string | null) => void;
+  onMoveRequested: (sourceFullPath: string, destinationDirectory: string) => void;
 }) {
   const open = expandedPaths.has(node.fullPath);
   const highlighted = highlightedPaths.has(node.fullPath);
@@ -229,12 +256,36 @@ function TreeNode({
     }
   }, [node.isDir, node.fullPath, node.name, loaded, open, loadChildren, onOpenFile, onToggleExpanded]);
 
+  const isBeingDragged = draggedNode?.fullPath === node.fullPath;
+  const isDropTarget = dropTargetPath === node.fullPath;
+
   return (
     <div>
       <div
         onClick={handleClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", node.fullPath); // perfunctory only — never read back
+          e.dataTransfer.effectAllowed = "move";
+          onDragStartNode({ fullPath: node.fullPath, isDir: node.isDir });
+        }}
+        onDragEnd={() => onDragEndGlobal()}
+        onDragOver={(e) => {
+          if (!draggedNode || !isValidDropTarget(draggedNode, node)) return;
+          e.preventDefault();
+          onSetDropTarget(node.fullPath);
+        }}
+        onDragLeave={() => {
+          if (dropTargetPath === node.fullPath) onSetDropTarget(null);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          onSetDropTarget(null);
+          if (!draggedNode || !isValidDropTarget(draggedNode, node)) return;
+          onMoveRequested(draggedNode.fullPath, node.fullPath);
+        }}
         style={{
           position: "relative",
           display: "flex",
@@ -244,7 +295,10 @@ function TreeNode({
           paddingRight: 8,
           height: 24,
           cursor: "pointer",
-          background: hovered ? "var(--bg-hover)" : "transparent",
+          background: isDropTarget ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+          outline: isDropTarget ? "1px solid var(--accent)" : "none",
+          outlineOffset: -1,
+          opacity: isBeingDragged ? 0.5 : 1,
           borderRadius: 4,
           userSelect: "none",
         }}
@@ -433,6 +487,12 @@ function TreeNode({
               refreshToken={refreshToken}
               highlightedPaths={highlightedPaths}
               onDeleted={onDeleted}
+              draggedNode={draggedNode}
+              onDragStartNode={onDragStartNode}
+              onDragEndGlobal={onDragEndGlobal}
+              dropTargetPath={dropTargetPath}
+              onSetDropTarget={onSetDropTarget}
+              onMoveRequested={onMoveRequested}
             />
           ))}
           {children.length === 0 && loaded && (
@@ -453,6 +513,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onAtMention,
   onAtMentions,
   onUploadBusyChange,
+  onFileMoved,
 }, ref) {
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -468,11 +529,31 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [creating, setCreating] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
   const [creatingBusy, setCreatingBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [draggedNode, setDraggedNode] = useState<DraggedNode | null>(null);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const prevCwdRef = useRef<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const createInputRef = useRef<HTMLInputElement>(null);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
   const uploadBusy = uploadPhase !== "idle";
+
+  const handleMoveRequested = useCallback(async (sourceFullPath: string, destinationDirectory: string) => {
+    setMoveError(null);
+    try {
+      const res = await fetch(`/api/files/${encodeFilePathForApi(sourceFullPath)}?type=move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationDirectory }),
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Move failed (HTTP ${res.status})`);
+      setTreeRefreshKey((key) => key + 1);
+      onFileMoved?.(sourceFullPath, joinFilePath(destinationDirectory, getFileName(sourceFullPath)));
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : String(err));
+    }
+  }, [onFileMoved]);
 
   const handleToggleExpanded = useCallback((fullPath: string, open: boolean) => {
     setExpandedPaths((prev) => {
@@ -652,7 +733,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     return () => { cancelled = true; };
   }, [cwd, refreshKey, treeRefreshKey]);
 
-  const showUploadFeedback = uploadBusy || pendingConflict !== null || uploadError !== null || uploadSummary !== null;
+  const showUploadFeedback = uploadBusy || pendingConflict !== null || uploadError !== null || uploadSummary !== null || moveError !== null;
 
   const addUploadedFilesToChat = useCallback(() => {
     if (!uploadSummary || uploadSummary.uploaded.length === 0) return;
@@ -718,6 +799,13 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           <div role="alert" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, lineHeight: 1.35, color: "#f87171" }}>
             <span style={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>{uploadError}</span>
             <DismissButton onClick={() => setUploadError(null)} title="Dismiss error" />
+          </div>
+        )}
+
+        {moveError && (
+          <div role="alert" style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, lineHeight: 1.35, color: "#f87171" }}>
+            <span style={{ minWidth: 0, flex: 1, overflowWrap: "anywhere" }}>{moveError}</span>
+            <DismissButton onClick={() => setMoveError(null)} title="Dismiss error" />
           </div>
         )}
 
@@ -840,6 +928,12 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
               refreshToken={refreshToken}
               highlightedPaths={highlightedPaths}
               onDeleted={() => setTreeRefreshKey((key) => key + 1)}
+              draggedNode={draggedNode}
+              onDragStartNode={setDraggedNode}
+              onDragEndGlobal={() => { setDraggedNode(null); setDropTargetPath(null); }}
+              dropTargetPath={dropTargetPath}
+              onSetDropTarget={setDropTargetPath}
+              onMoveRequested={(source, dest) => void handleMoveRequested(source, dest)}
             />
           ))
         )}
@@ -848,6 +942,31 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
             No files found
           </div>
         )}
+        {/* Always-present empty-space drop zone for moving an item back to
+            the top-level root — without this, once the tree fills the
+            available height there's nowhere left to drop onto for that. */}
+        <div
+          style={{
+            minHeight: 40,
+            background: dropTargetPath === cwd ? "var(--bg-selected)" : "transparent",
+            outline: dropTargetPath === cwd ? "1px solid var(--accent)" : "none",
+            outlineOffset: -1,
+          }}
+          onDragOver={(e) => {
+            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === cwd) return;
+            e.preventDefault();
+            setDropTargetPath(cwd);
+          }}
+          onDragLeave={() => {
+            if (dropTargetPath === cwd) setDropTargetPath(null);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDropTargetPath(null);
+            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === cwd) return;
+            void handleMoveRequested(draggedNode.fullPath, cwd);
+          }}
+        />
       </div>
     </div>
   );

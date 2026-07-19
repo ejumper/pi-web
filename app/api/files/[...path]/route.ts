@@ -73,18 +73,18 @@ function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
 }
 
-// Resolves a browsable path from URL segments and validates it against the
-// allow-list twice: once on the raw path, once on the realpath'd path against
-// realpath'd roots (so a symlink inside an allowed root can't redirect
-// writes/deletes outside it). Shared by upload, create, and delete — the only
-// difference between them is whether the target must be a directory.
-async function resolveAllowedPath(
-  segments: string[],
+// Validates an already-resolved path string against the allow-list twice:
+// once on the raw path, once on the realpath'd path against realpath'd roots
+// (so a symlink inside an allowed root can't redirect writes/deletes/moves
+// outside it). Shared by upload, create, delete, move (both source and
+// destination), and save — the only difference between callers is whether
+// the target must be a directory.
+async function resolveAllowedPathForTarget(
+  target: string,
   options: { requireDirectory?: boolean } = {}
 ): Promise<
   { realPath: string; stat: fs.Stats; realRoots: Set<string> } | { response: NextResponse }
 > {
-  const target = filePathFromSegments(segments);
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(target, allowedRoots)) {
     return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
@@ -116,6 +116,16 @@ async function resolveAllowedPath(
   return { realPath, stat, realRoots };
 }
 
+// Resolves a browsable path from URL segments through the same validation.
+async function resolveAllowedPath(
+  segments: string[],
+  options: { requireDirectory?: boolean } = {}
+): Promise<
+  { realPath: string; stat: fs.Stats; realRoots: Set<string> } | { response: NextResponse }
+> {
+  return resolveAllowedPathForTarget(filePathFromSegments(segments), options);
+}
+
 async function resolveAllowedDirectory(segments: string[]): Promise<
   { directory: string } | { response: NextResponse }
 > {
@@ -135,10 +145,53 @@ export async function POST(
 ) {
   try {
     const { path: segments } = await params;
+    const type = request.nextUrl.searchParams.get("type") ?? "upload";
+
+    if (type === "move") {
+      const body = await request.json().catch(() => null) as { destinationDirectory?: unknown } | null;
+      const destinationDirectory = typeof body?.destinationDirectory === "string" ? body.destinationDirectory : null;
+      if (!destinationDirectory) {
+        return NextResponse.json({ error: "destinationDirectory (string) is required" }, { status: 400 });
+      }
+
+      const resolvedSource = await resolveAllowedPathForTarget(filePathFromSegments(segments));
+      if ("response" in resolvedSource) return resolvedSource.response;
+      const { realPath: sourceReal, stat: sourceStat, realRoots } = resolvedSource;
+
+      // Don't let a stray drag move an entire allowed root (a project/cwd).
+      if (realRoots.has(sourceReal)) {
+        return NextResponse.json({ error: "Cannot move a project root" }, { status: 400 });
+      }
+
+      const resolvedDest = await resolveAllowedPathForTarget(destinationDirectory, { requireDirectory: true });
+      if ("response" in resolvedDest) return resolvedDest.response;
+      const { realPath: destReal } = resolvedDest;
+
+      if (destReal === sourceReal) {
+        return NextResponse.json({ error: "Cannot move an item into itself" }, { status: 400 });
+      }
+      if (destReal === path.dirname(sourceReal)) {
+        return NextResponse.json({ error: "Item is already in that location" }, { status: 400 });
+      }
+      if (sourceStat.isDirectory() && destReal.startsWith(sourceReal + path.sep)) {
+        return NextResponse.json({ error: "Cannot move a folder into its own subfolder" }, { status: 400 });
+      }
+
+      const destination = path.join(destReal, path.basename(sourceReal));
+      try {
+        fs.statSync(destination);
+        return NextResponse.json({ error: `"${path.basename(sourceReal)}" already exists in that folder` }, { status: 409 });
+      } catch {
+        // ENOENT expected — destination is free.
+      }
+
+      fs.renameSync(sourceReal, destination);
+      return NextResponse.json({ moved: sourceReal, destination });
+    }
+
     const resolvedDirectory = await resolveAllowedDirectory(segments);
     if ("response" in resolvedDirectory) return resolvedDirectory.response;
     const { directory } = resolvedDirectory;
-    const type = request.nextUrl.searchParams.get("type") ?? "upload";
 
     if (type === "upload-check") {
       const body = await request.json().catch(() => null) as { fileNames?: unknown } | null;
