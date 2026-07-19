@@ -8,6 +8,7 @@ export interface Tab {
   label: string;
   filePath: string;
   sourceSessionId?: string | null;
+  dirty?: boolean;
 }
 
 interface Props {
@@ -71,6 +72,12 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             >
               {tab.label}
             </span>
+            {tab.dirty && (
+              <span
+                title="Unsaved changes"
+                style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }}
+              />
+            )}
             <button
               onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
               onMouseEnter={() => setHoveredClose(tab.id)}

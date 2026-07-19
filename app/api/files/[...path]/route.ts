@@ -285,6 +285,46 @@ export async function DELETE(
   }
 }
 
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  try {
+    const { path: segments } = await params;
+    const resolved = await resolveAllowedPath(segments);
+    if ("response" in resolved) return resolved.response;
+    const { realPath, stat } = resolved;
+
+    if (stat.isDirectory()) {
+      return NextResponse.json({ error: "Cannot save a directory" }, { status: 400 });
+    }
+
+    const body = await request.json().catch(() => null) as { content?: unknown; expectedMtime?: unknown } | null;
+    if (typeof body?.content !== "string" || typeof body?.expectedMtime !== "string") {
+      return NextResponse.json({ error: "content (string) and expectedMtime (string) are required" }, { status: 400 });
+    }
+    const { content, expectedMtime } = body;
+
+    if (Buffer.byteLength(content, "utf-8") > TEXT_PREVIEW_MAX_BYTES) {
+      return NextResponse.json({ error: "Content too large to save (>256KB)" }, { status: 413 });
+    }
+
+    // Re-stat right before comparing — resolveAllowedPath's stat is from
+    // before the (async) body parse, which leaves a small race window.
+    const currentStat = fs.statSync(realPath);
+    const currentMtime = currentStat.mtime.toISOString();
+    if (currentMtime !== expectedMtime) {
+      return NextResponse.json({ error: "File changed on disk", currentMtime }, { status: 409 });
+    }
+
+    fs.writeFileSync(realPath, content, "utf-8");
+    const newStat = fs.statSync(realPath);
+    return NextResponse.json({ saved: true, mtime: newStat.mtime.toISOString(), size: newStat.size });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+  }
+}
+
 function createFileBodyStream(filePath: string, range?: { start: number; end: number }): ReadableStream<Uint8Array> {
   const fileStream = fs.createReadStream(filePath, range);
   let closed = false;
@@ -510,7 +550,7 @@ export async function GET(
       }
       const content = fs.readFileSync(filePath, "utf-8");
       const language = getLanguage(filePath);
-      return NextResponse.json({ content, language, size: stat.size });
+      return NextResponse.json({ content, language, size: stat.size, mtime: stat.mtime.toISOString() });
     }
 
     if (type === "download") {

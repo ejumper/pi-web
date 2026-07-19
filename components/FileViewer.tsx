@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, type MouseEvent } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { useEffect, useState, useRef, useCallback, useMemo, type MouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
+import type { EditorView } from "@codemirror/view";
 import { useTheme } from "@/hooks/useTheme";
+import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
+import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
+import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
+import { loadLanguageForFile } from "@/components/editor/language";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   getFileExt,
@@ -22,12 +24,14 @@ interface Props {
   cwd?: string;
   sourceSessionId?: string | null;
   onOpenFile?: (filePath: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FileData {
   content: string;
   language: string;
   size: number;
+  mtime: string;
 }
 
 function getFileApiUrl(
@@ -43,6 +47,14 @@ function getFileApiUrl(
     if (value !== undefined) searchParams.set(key, String(value));
   }
   return `/api/files/${encoded}?${searchParams.toString()}`;
+}
+
+function getFileSaveUrl(filePath: string, sourceSessionId?: string | null): string {
+  const encoded = encodeFilePathForApi(filePath);
+  const searchParams = new URLSearchParams();
+  if (sourceSessionId) searchParams.set("sessionId", sourceSessionId);
+  const qs = searchParams.toString();
+  return `/api/files/${encoded}${qs ? `?${qs}` : ""}`;
 }
 
 function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
@@ -680,7 +692,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
   );
 }
 
-export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
+export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange }: Props) {
   if (isImagePath(filePath)) {
     return <ImageViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
@@ -690,10 +702,12 @@ export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props
   if (isDocumentPreviewPath(filePath)) {
     return <DocumentViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
-  return <TextFileViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} onOpenFile={onOpenFile} />;
+  return <TextFileViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} onOpenFile={onOpenFile} onDirtyChange={onDirtyChange} />;
 }
 
-function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
+type ConflictInfo = { source: "watch" | "save"; diskMtime: string };
+
+function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange }: Props) {
   const { isDark } = useTheme();
   const [data, setData] = useState<FileData | null>(null);
   const [prevContent, setPrevContent] = useState<string | null>(null);
@@ -704,12 +718,33 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const latestDocRef = useRef<string>("");
+  const dirtyRef = useRef(false);
+  const expectedMtimeRef = useRef<string>("");
+  const lastSavedMtimeRef = useRef<string | null>(null);
+  const isProgrammaticUpdateRef = useRef(false);
+  const compartmentsRef = useRef(createEditorCompartments());
+  // Guards against out-of-order network responses: only the response to the
+  // most recently issued fetchContent call is allowed to update state. Without
+  // this, a slow/stale request (e.g. one racing a save, or the initial load
+  // resolving late) could resolve after a newer one and silently overwrite
+  // fresher content — including clobbering saved edits back to an earlier
+  // (possibly empty) snapshot.
+  const fetchSeqRef = useRef(0);
 
   const fetchContent = useCallback((filePath: string, isRefresh = false) => {
+    const seq = ++fetchSeqRef.current;
     return fetch(getFileApiUrl(filePath, "read", sourceSessionId))
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
+        if (seq !== fetchSeqRef.current) return null; // a newer request has since superseded this one
+        if (isRefresh && dirtyRef.current) return null; // user started editing again since this refresh was requested
         if (d.error) {
           setError(d.error);
           return null;
@@ -723,13 +758,66 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
         } else {
           setData(d);
         }
+        latestDocRef.current = d.content;
+        expectedMtimeRef.current = d.mtime;
         return d;
       })
       .catch((e) => {
+        if (seq !== fetchSeqRef.current) return null;
         setError(String(e));
         return null;
       });
   }, [sourceSessionId]);
+
+  // Replaces the live editor buffer with fresh disk content (used by the
+  // conflict banner's Reload action) and clears local-edit state.
+  const reloadFromDisk = useCallback(() => {
+    fetchContent(filePath).then((d) => {
+      if (!d) return;
+      const view = viewRef.current;
+      if (view) {
+        isProgrammaticUpdateRef.current = true;
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: d.content } });
+        isProgrammaticUpdateRef.current = false;
+      }
+      dirtyRef.current = false;
+      setDirty(false);
+      setConflict(null);
+    });
+  }, [fetchContent, filePath]);
+
+  const handleSave = useCallback((forceMtime?: string) => {
+    setSaveState("saving");
+    setSaveError(null);
+    const expectedMtime = forceMtime ?? expectedMtimeRef.current;
+    fetch(getFileSaveUrl(filePath, sourceSessionId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: latestDocRef.current, expectedMtime }),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({})) as { error?: string; mtime?: string; size?: number; currentMtime?: string };
+        if (res.status === 409) {
+          setConflict({ source: "save", diskMtime: json.currentMtime ?? "" });
+          setSaveState("idle");
+          return;
+        }
+        if (!res.ok || !json.mtime) {
+          throw new Error(json.error ?? `Save failed (HTTP ${res.status})`);
+        }
+        expectedMtimeRef.current = json.mtime;
+        lastSavedMtimeRef.current = json.mtime;
+        setData((prev) => (prev ? { ...prev, content: latestDocRef.current, mtime: json.mtime!, size: json.size ?? prev.size } : prev));
+        dirtyRef.current = false;
+        setDirty(false);
+        setConflict(null);
+        setSaveState("idle");
+      })
+      .catch((e) => {
+        setSaveState("error");
+        setSaveError(e instanceof Error ? e.message : String(e));
+      });
+  }, [filePath, sourceSessionId]);
 
   // Initial load + SSE watch setup
   useEffect(() => {
@@ -742,6 +830,12 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
     setWrapLines(false);
     setChangeCount(0);
     setWatching(false);
+    setDirty(false);
+    setSaveState("idle");
+    setSaveError(null);
+    setConflict(null);
+    dirtyRef.current = false;
+    lastSavedMtimeRef.current = null;
 
     if (esRef.current) {
       esRef.current.close();
@@ -760,7 +854,16 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
       setWatching(true);
     });
 
-    es.addEventListener("change", () => {
+    es.addEventListener("change", (e) => {
+      let mtime: string | undefined;
+      try {
+        mtime = (JSON.parse((e as MessageEvent).data) as { mtime?: string }).mtime;
+      } catch { /* ignore */ }
+      if (mtime && mtime === lastSavedMtimeRef.current) return; // echo of our own save
+      if (dirtyRef.current) {
+        setConflict({ source: "watch", diskMtime: mtime ?? "" });
+        return;
+      }
       fetchContent(filePath, true);
     });
 
@@ -777,6 +880,34 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
       esRef.current = null;
     };
   }, [filePath, fetchContent, sourceSessionId]);
+
+  // Reconfigure the wrap compartment when the toggle changes (initial value
+  // is already baked into the extensions built for CodeMirrorHost's mount).
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: compartmentsRef.current.wrap.reconfigure(wrapExtension(wrapLines)) });
+  }, [wrapLines]);
+
+  // Reconfigure syntax-highlight colors when the app theme changes.
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: compartmentsRef.current.highlight.reconfigure(getSyntaxHighlightExtension(isDark)) });
+  }, [isDark]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const editorExtensions = useMemo(
+    () => buildTextEditorExtensions({
+      compartments: compartmentsRef.current,
+      isDark,
+      wrapEnabled: wrapLines,
+      onSave: () => handleSave(),
+    }),
+    // Only the initial values matter — CodeMirrorHost doesn't react to prop
+    // changes after mount; later changes go through the compartments above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   if (loading) {
     return (
@@ -842,6 +973,35 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
           />
           {watching ? "live" : "static"}
         </span>
+
+        {/* Unsaved-changes indicator */}
+        {dirty && (
+          <span
+            title="Unsaved changes"
+            style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", display: "inline-block", flexShrink: 0 }}
+          />
+        )}
+
+        {/* Save button */}
+        <button
+          onClick={() => handleSave()}
+          disabled={!dirty || saveState === "saving"}
+          title="Save (Ctrl/Cmd+S)"
+          style={{
+            padding: "2px 8px", fontSize: 11, cursor: !dirty || saveState === "saving" ? "default" : "pointer",
+            background: "var(--bg-hover)",
+            color: dirty ? "var(--text)" : "var(--text-dim)",
+            border: "1px solid var(--border)", borderRadius: 5,
+            opacity: !dirty || saveState === "saving" ? 0.6 : 1,
+          }}
+        >
+          {saveState === "saving" ? "Saving…" : "Save"}
+        </button>
+        {saveState === "error" && saveError && (
+          <span style={{ color: "#f87171", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
+            {saveError}
+          </span>
+        )}
 
         {/* Diff / Source toggle — shown only when there are changes */}
         {hasDiff && (
@@ -946,6 +1106,47 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
       </div>
 
+      {/* Conflict banner */}
+      {conflict && (
+        <div
+          role="alert"
+          style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "6px 16px", fontSize: 12, color: "var(--text)",
+            background: "color-mix(in srgb, #fbbf24 12%, var(--bg-panel))",
+            borderBottom: "1px solid color-mix(in srgb, #fbbf24 45%, var(--border))",
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            {conflict.source === "watch"
+              ? "File changed on disk while you have unsaved edits."
+              : "Save failed — file changed on disk since you loaded it."}
+          </span>
+          <button
+            onClick={reloadFromDisk}
+            style={{ padding: "2px 8px", fontSize: 11, border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer" }}
+          >
+            Reload
+          </button>
+          {conflict.source === "watch" ? (
+            <button
+              onClick={() => setConflict(null)}
+              style={{ padding: "2px 8px", fontSize: 11, border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: "var(--text)", cursor: "pointer" }}
+            >
+              Keep editing
+            </button>
+          ) : (
+            <button
+              onClick={() => handleSave(conflict.diskMtime)}
+              style={{ padding: "2px 8px", fontSize: 11, border: "1px solid #ef4444", borderRadius: 5, background: "var(--bg-panel)", color: "#ef4444", cursor: "pointer" }}
+            >
+              Overwrite
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Content area */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
         {viewMode === "diff" && hasDiff ? (
@@ -990,30 +1191,27 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             </ReactMarkdown>
           </div>
         ) : (
-          <SyntaxHighlighter
-            language={data.language === "text" ? "plaintext" : data.language}
-            style={isDark ? vscDarkPlus : vs}
-            showLineNumbers
-            lineNumberStyle={{
-              color: "var(--text-dim)",
-              fontStyle: "normal",
-              minWidth: "3em",
-              paddingRight: "1em",
+          <CodeMirrorHost
+            key={filePath}
+            doc={latestDocRef.current || data.content}
+            extensions={editorExtensions}
+            onReady={(view) => {
+              viewRef.current = view;
+              const pending = loadLanguageForFile(filePath);
+              pending?.then((ext) => {
+                if (viewRef.current === view) {
+                  view.dispatch({ effects: compartmentsRef.current.language.reconfigure(ext) });
+                }
+              }).catch(() => { /* no highlighting for this file type, non-fatal */ });
             }}
-            customStyle={{
-              margin: 0,
-              padding: "12px 0",
-              background: "var(--bg)",
-              fontSize: 13,
-              lineHeight: 1.6,
-              fontFamily: "var(--font-mono)",
-              minHeight: "100%",
+            onDocChange={(docString) => {
+              latestDocRef.current = docString;
+              if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
+                dirtyRef.current = true;
+                setDirty(true);
+              }
             }}
-            codeTagProps={{ style: { fontFamily: "var(--font-mono)" } }}
-            wrapLongLines={wrapLines}
-          >
-            {data.content}
-          </SyntaxHighlighter>
+          />
         )}
       </div>
     </div>

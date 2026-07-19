@@ -365,6 +365,10 @@ export function AppShell() {
   }, [handleOpenFile, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
+    const tab = fileTabs.find((t) => t.id === tabId);
+    if (tab?.dirty && !window.confirm(`Discard unsaved changes to "${tab.label}"?`)) {
+      return;
+    }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (next.length === 0) setRightPanelOpen(false);
@@ -375,6 +379,22 @@ export function AppShell() {
       const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
+  }, [fileTabs]);
+
+  const handleFileDirtyChange = useCallback((tabId: string, dirty: boolean) => {
+    setFileTabs((prev) => prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t)));
+  }, []);
+
+  // Warn before closing/reloading the browser tab while any file has unsaved edits.
+  useEffect(() => {
+    const anyDirty = fileTabs.some((t) => t.dirty);
+    if (!anyDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, [fileTabs]);
 
   const handleViewFullHistory = useCallback(() => {
@@ -391,8 +411,6 @@ export function AppShell() {
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
-
-  const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
 
   const sidebarContent = (
     <>
@@ -1129,20 +1147,33 @@ export function AppShell() {
 
         </div>
 
-        {/* File content */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          {activeFileTab?.filePath ? (
-            <FileViewer
-              filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
-              sourceSessionId={activeFileTab.sourceSessionId}
-              onOpenFile={(filePath) => handleOpenFile(
-                filePath,
-                getFileName(filePath),
-                activeFileTab.sourceSessionId,
-              )}
-            />
-          ) : (
+        {/* File content — every open tab stays mounted (visibility toggled via
+            CSS) so switching tabs never loses an editor's unsaved edits or
+            drops its live file-watch connection. */}
+        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+          {fileTabs.map((tab) => (
+            <div
+              key={tab.id}
+              style={{
+                display: tab.id === activeFileTabId ? "flex" : "none",
+                flexDirection: "column",
+                height: "100%",
+              }}
+            >
+              <FileViewer
+                filePath={tab.filePath}
+                cwd={activeCwd ?? undefined}
+                sourceSessionId={tab.sourceSessionId}
+                onOpenFile={(filePath) => handleOpenFile(
+                  filePath,
+                  getFileName(filePath),
+                  tab.sourceSessionId,
+                )}
+                onDirtyChange={(dirty) => handleFileDirtyChange(tab.id, dirty)}
+              />
+            </div>
+          ))}
+          {fileTabs.length === 0 && (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
               No file open
             </div>
