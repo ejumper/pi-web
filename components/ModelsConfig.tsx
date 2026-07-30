@@ -1120,6 +1120,12 @@ function LocalModelsDetail() {
   const [status, setStatus] = useState<LocalModelStatus | undefined>(undefined); // undefined = not checked yet
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [startingKey, setStartingKey] = useState<string | null>(null);
+  // Set once a start has been accepted and held until that model actually
+  // shows up on the port. The request itself returns in milliseconds (it's
+  // spawned detached), but the load behind it takes minutes for a big model —
+  // without this the row would snap back to "Start" with nothing to show for
+  // it, which reads as a failure.
+  const [awaitingKey, setAwaitingKey] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [noJudge, setNoJudge] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1156,8 +1162,12 @@ function LocalModelsDetail() {
         body: JSON.stringify({ key, noJudge }),
       });
       const d = (await res.json()) as { started?: boolean; message?: string; error?: string };
-      if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
-      else setOutput(d.message ?? null);
+      if (!res.ok || d.error) {
+        setError(d.error ?? `HTTP ${res.status}`);
+      } else {
+        setOutput(d.message ?? null);
+        setAwaitingKey(key);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1166,9 +1176,17 @@ function LocalModelsDetail() {
     }
   }, [checkStatus, noJudge]);
 
+  // Clear the "starting" state once the model we asked for is actually up.
+  useEffect(() => {
+    if (!awaitingKey || !status) return;
+    const target = status.models.find((m) => m.key === awaitingKey);
+    if (target && status.main.model === target.alias) setAwaitingKey(null);
+  }, [awaitingKey, status]);
+
   // `addie stop` is port-scoped and takes down the main model AND the judge.
   const handleStop = useCallback(async () => {
     setStopping(true);
+    setAwaitingKey(null);
     setError(null);
     setOutput(null);
     try {
@@ -1317,7 +1335,7 @@ function LocalModelsDetail() {
           // The running server reports the launcher's -a alias, not addie's key.
           const isRunning = status?.main.model === m.alias;
           const isPending = pendingKey === m.key;
-          const isStarting = startingKey === m.key;
+          const isStarting = startingKey === m.key || awaitingKey === m.key;
           const disabled = (startingKey !== null && !isStarting) || stopping;
           return (
             <div key={m.key} style={{
