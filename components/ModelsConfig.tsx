@@ -1097,13 +1097,18 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
 
 // ── Local server ─────────────────────────────────────────────────────────────
 
-const LOCAL_MODELS: { id: string; label: string }[] = [
-  { id: "qwen35b", label: "Qwen 3.6 35B" },
-  { id: "qwen9b", label: "Qwen 3.5 9B" },
-  { id: "qwen122b", label: "Qwen 3.5 122B" },
-  { id: "qwen35bu", label: "Qwen 3.6 35B Uncensored" },
-  { id: "ornith35b", label: "Ornith 1.0 35B" },
-];
+// The model list is no longer hardcoded — it comes from /api/local-model,
+// which reads the catalog `addie` regenerates on every run. Adding a model to
+// addie's MODELS table is all it takes to have it appear here, on this
+// instance and (once the pi config repo is synced) on the server's too.
+type LocalModel = { key: string; alias: string; launcher: string; label: string };
+type PortStatus = { running: boolean; model: string | null };
+type LocalModelStatus = {
+  models: LocalModel[];
+  mainPort: number;
+  main: PortStatus;
+  judge: PortStatus & { alias: string; port: number };
+};
 
 // Display-only — the "clone:" prefix stays in the value posted to the API,
 // just hidden from the dropdown label.
@@ -1112,20 +1117,21 @@ function stripVoicePrefix(id: string): string {
 }
 
 function LocalModelsDetail() {
-  const [runningModel, setRunningModel] = useState<string | null | undefined>(undefined); // undefined = not checked yet
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const [launchingId, setLaunchingId] = useState<string | null>(null);
-  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [status, setStatus] = useState<LocalModelStatus | undefined>(undefined); // undefined = not checked yet
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [startingKey, setStartingKey] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [noJudge, setNoJudge] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
 
   const checkStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/local-model");
-      const d = (await res.json()) as { running: boolean; model?: string | null };
-      setRunningModel(d.running ? (d.model ?? null) : null);
+      setStatus((await res.json()) as LocalModelStatus);
     } catch {
-      setRunningModel(null);
+      // keep the previous snapshot rather than blanking the list on one
+      // failed poll — the model may still be loading.
     }
   }, []);
 
@@ -1135,45 +1141,45 @@ function LocalModelsDetail() {
     return () => clearInterval(interval);
   }, [checkStatus]);
 
-  const handleLaunch = useCallback(async (id: string) => {
-    setPendingId(null);
-    setLaunchingId(id);
+  // Start is fire-and-forget: addie blocks until each server reports healthy
+  // (minutes, for a big model), so the API spawns it detached and we let the
+  // 5s poll above report progress instead of awaiting a response.
+  const handleStart = useCallback(async (key: string) => {
+    setPendingKey(null);
+    setStartingKey(key);
     setError(null);
     setOutput(null);
     try {
       const res = await fetch("/api/local-model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: id }),
+        body: JSON.stringify({ key, noJudge }),
       });
-      const d = (await res.json()) as { success?: boolean; output?: string; error?: string };
+      const d = (await res.json()) as { started?: boolean; message?: string; error?: string };
       if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
-      else setOutput(d.output ?? null);
+      else setOutput(d.message ?? null);
     } catch (e) {
       setError(String(e));
     } finally {
-      setLaunchingId(null);
+      setStartingKey(null);
       checkStatus();
     }
-  }, [checkStatus]);
+  }, [checkStatus, noJudge]);
 
-  const handleStop = useCallback(async (id: string) => {
-    setStoppingId(id);
+  // `addie stop` is port-scoped and takes down the main model AND the judge.
+  const handleStop = useCallback(async () => {
+    setStopping(true);
     setError(null);
     setOutput(null);
     try {
-      const res = await fetch("/api/local-model", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: id }),
-      });
+      const res = await fetch("/api/local-model", { method: "DELETE" });
       const d = (await res.json()) as { success?: boolean; output?: string; error?: string };
       if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
       else setOutput(d.output ?? null);
     } catch (e) {
       setError(String(e));
     } finally {
-      setStoppingId(null);
+      setStopping(false);
       checkStatus();
     }
   }, [checkStatus]);
@@ -1258,52 +1264,84 @@ function LocalModelsDetail() {
     return "not running";
   })();
 
+  const mainRunning = !!status?.main.running;
+  const judgeRunning = !!status?.judge.running;
+  // Fall back to the documented defaults only for the brief pre-first-poll
+  // render; once status arrives the catalog's own values win.
+  const mainPort = status?.mainPort ?? 8080;
+  const judgePort = status?.judge.port ?? 7979;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <SectionTitle>Local Server</SectionTitle>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: runningModel ? "#4ade80" : "var(--border)", display: "inline-block" }} />
-          <span style={{ fontSize: 11, color: runningModel ? "#4ade80" : "var(--text-dim)", fontFamily: runningModel ? "var(--font-mono)" : undefined }}>
-            {runningModel === undefined ? "checking…" : runningModel ? runningModel : "not running"}
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: mainRunning ? "#4ade80" : "var(--border)", display: "inline-block" }} />
+          <span style={{ fontSize: 11, color: mainRunning ? "#4ade80" : "var(--text-dim)", fontFamily: mainRunning ? "var(--font-mono)" : undefined }}>
+            {status === undefined ? "checking…" : mainRunning ? (status.main.model ?? "running") : "not running"}
           </span>
         </div>
       </div>
 
       <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        Runs the matching <code>~/.local/bin/&lt;model&gt; --background</code> launcher script — identical to running it from a terminal. Starting a model stops whichever one is currently running first (only one runs at a time on port 8080).
+        Runs <code>addie &lt;model&gt;</code> — identical to running it from a terminal. That starts the main model on port {mainPort} <em>and</em> the judge instance on port {judgePort} together. Starting a model replaces whichever is currently running (only one at a time per port); Stop takes down both.
       </p>
 
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+        <input type="checkbox" checked={noJudge} onChange={(e) => setNoJudge(e.target.checked)} />
+        Start main model only (<code>--no-judge</code>)
+      </label>
+
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+        padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
+        background: judgeRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
+      }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 12, color: "var(--text)" }}>Judge · port {judgePort}</span>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+            {status === undefined ? "checking…" : judgeRunning ? (status.judge.model ?? status.judge.alias) : "not running"}
+          </span>
+        </div>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: judgeRunning ? "#4ade80" : "var(--border)", display: "inline-block", flexShrink: 0 }} />
+      </div>
+
+      {status !== undefined && status.models.length === 0 && (
+        <p style={{ margin: 0, fontSize: 12, color: "#fbbf24", lineHeight: 1.5 }}>
+          No model catalog found. It&apos;s written to <code>~/.pi/agent/pi-web-local-models.json</code> every time <code>addie</code> runs — run <code>addie models</code> on the desktop, then sync the pi config repo to this machine.
+        </p>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {LOCAL_MODELS.map((m) => {
-          const isRunning = runningModel === m.id;
-          const isStopping = stoppingId === m.id;
-          const isPending = pendingId === m.id;
-          const isLaunching = launchingId === m.id;
-          const disabled = (launchingId !== null && !isLaunching) || (stoppingId !== null && !isStopping);
+        {(status?.models ?? []).map((m) => {
+          // The running server reports the launcher's -a alias, not addie's key.
+          const isRunning = status?.main.model === m.alias;
+          const isPending = pendingKey === m.key;
+          const isStarting = startingKey === m.key;
+          const disabled = (startingKey !== null && !isStarting) || stopping;
           return (
-            <div key={m.id} style={{
+            <div key={m.key} style={{
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
               padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
               background: isRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
             }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12, color: "var(--text)" }}>{m.label}</span>
-                <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{m.id}</span>
+                <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>addie {m.key} · {m.alias}</span>
               </div>
 
               {isRunning ? (
                 <button
-                  onClick={() => handleStop(m.id)}
-                  disabled={isStopping}
-                  title="Stop this model"
+                  onClick={handleStop}
+                  disabled={stopping}
+                  title="Stop the main model and the judge"
                   style={{
                     display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
                     padding: "5px 10px", background: "none", border: "1px solid rgba(74,222,128,0.35)", borderRadius: 5,
-                    color: "#4ade80", cursor: isStopping ? "not-allowed" : "pointer", fontSize: 11,
+                    color: "#4ade80", cursor: stopping ? "not-allowed" : "pointer", fontSize: 11,
                   }}
                   onMouseEnter={(e) => {
-                    if (isStopping) return;
+                    if (stopping) return;
                     e.currentTarget.style.background = "rgba(239,68,68,0.1)";
                     e.currentTarget.style.borderColor = "rgba(239,68,68,0.4)";
                     e.currentTarget.style.color = "#ef4444";
@@ -1314,7 +1352,7 @@ function LocalModelsDetail() {
                     e.currentTarget.style.color = "#4ade80";
                   }}
                 >
-                  {isStopping ? "Stopping…" : (
+                  {stopping ? "Stopping…" : (
                     <>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
@@ -1326,13 +1364,13 @@ function LocalModelsDetail() {
               ) : isPending ? (
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button
-                    onClick={() => setPendingId(null)}
+                    onClick={() => setPendingKey(null)}
                     style={{ padding: "5px 10px", background: "none", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => handleLaunch(m.id)}
+                    onClick={() => handleStart(m.key)}
                     style={{ padding: "5px 10px", background: "var(--accent)", border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
                   >
                     Confirm start
@@ -1340,7 +1378,7 @@ function LocalModelsDetail() {
                 </div>
               ) : (
                 <button
-                  onClick={() => setPendingId(m.id)}
+                  onClick={() => setPendingKey(m.key)}
                   disabled={disabled}
                   style={{
                     padding: "5px 12px", background: "none", border: "1px solid var(--border)", borderRadius: 5,
@@ -1348,7 +1386,7 @@ function LocalModelsDetail() {
                     cursor: disabled ? "not-allowed" : "pointer", fontSize: 11, flexShrink: 0,
                   }}
                 >
-                  {isLaunching ? "Starting…" : "Start"}
+                  {isStarting ? "Starting…" : "Start"}
                 </button>
               )}
             </div>
