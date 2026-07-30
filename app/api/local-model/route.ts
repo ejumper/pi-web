@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { join } from "path";
-import { homedir, tmpdir } from "os";
-import { openSync } from "fs";
+import { homedir } from "os";
 import { DESKTOP_HOST } from "@/lib/desktop-host";
 import { readLocalModelCatalog } from "@/lib/local-models";
 
@@ -125,18 +124,23 @@ export async function POST(req: Request) {
 
   try {
     const args = noJudge ? [key, "--no-judge"] : [key];
-    // Keep a log so a failed background start is diagnosable — stdio can't be
-    // piped back to the client once we stop awaiting. Not under ~/.pi/agent/,
-    // which is rsynced to the server and tracked in git.
-    const logPath = join(tmpdir(), "pi-web-addie.log");
-    const log = openSync(logPath, "a");
-    const child = spawn(ADDIE_BIN, args, { detached: true, stdio: ["ignore", log, log] });
+    // stdio is discarded on purpose. The obvious thing — redirecting it to a
+    // log so a failed background start is diagnosable — cannot be done safely
+    // here: the launcher scripts' status check shells out to `pgrep -af`,
+    // whose output contains the full `podman exec --env=KEY=VALUE ...` lines
+    // carrying the entire host environment, secrets included (see
+    // sanitizeScriptOutput above, and the note in pi-web.md). Writing that
+    // straight to a file would recreate exactly the leak that function exists
+    // to prevent, and a raw fd redirect gives no place to filter it.
+    //
+    // Nothing is lost: llama-server already logs to ~/models/logs/<alias>.log
+    // via the launcher itself, which is the useful log anyway.
+    const child = spawn(ADDIE_BIN, args, { detached: true, stdio: "ignore" });
     child.unref();
     return NextResponse.json({
       started: true,
       key,
-      message: `Starting ${key} (main + ${noJudge ? "no judge" : "judge"}). Large models take a few minutes to load — status updates below as they come up.`,
-      logPath,
+      message: `Starting ${key} (main + ${noJudge ? "no judge" : "judge"}). Large models take a few minutes to load — status updates below as they come up. Server logs: ~/models/logs/`,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
