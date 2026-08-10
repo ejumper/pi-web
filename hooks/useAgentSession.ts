@@ -671,6 +671,35 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  /**
+   * Focus for a docked panel is server state, not DOM state: the extension can
+   * move it through its handle, so the client reports intent and renders
+   * whatever comes back rather than tracking it locally.
+   */
+  const sendExtensionCustomFocus = useCallback(
+    async (request: ExtensionUiCustomRequest, flags: { focused?: boolean; hidden?: boolean }) => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      try {
+        await sendAgentCommand(sid, { type: "extension_ui_focus", id: request.id, ...flags });
+      } catch (e) {
+        console.error("Failed to send extension custom UI focus:", e);
+      }
+    },
+    [],
+  );
+
+  /** Report the panel's real column count so it renders at the width it occupies. */
+  const sendExtensionCustomResize = useCallback(async (request: ExtensionUiCustomRequest, cols: number) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, { type: "extension_ui_resize", id: request.id, cols });
+    } catch (e) {
+      console.error("Failed to send extension custom UI resize:", e);
+    }
+  }, []);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -1534,6 +1563,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    sendExtensionCustomFocus, sendExtensionCustomResize,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,

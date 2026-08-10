@@ -192,6 +192,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    sendExtensionCustomFocus, sendExtensionCustomResize,
     isAutoModelSelection,
     agentPhase,
     isNew,
@@ -439,7 +440,12 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         />
       )}
 
-      {extensionCustomUi && (
+      {/*
+        A capturing custom UI is still a modal scrim. A non-capturing one is
+        docked above the composer instead — see the render below, near the chat
+        input, so it stays pinned while the transcript scrolls under it.
+      */}
+      {extensionCustomUi && !extensionCustomUi.nonCapturing && (
         <ExtensionCustomPanel
           request={extensionCustomUi}
           onInput={sendExtensionCustomInput}
@@ -707,6 +713,14 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
           }}
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
+            {extensionCustomUi && extensionCustomUi.nonCapturing && (
+              <ExtensionDockedPanel
+                request={extensionCustomUi}
+                onInput={sendExtensionCustomInput}
+                onFocusChange={sendExtensionCustomFocus}
+                onResize={sendExtensionCustomResize}
+              />
+            )}
             <ExtensionWidgets widgets={belowEditorWidgets} />
           </div>
         </div>
@@ -869,7 +883,11 @@ function ExtensionDialog({
       style={{
         position: "absolute",
         inset: 0,
-        zIndex: 90,
+        // Above ExtensionCustomPanel (95). An extension's own panel must never
+        // cover a decision the agent is blocked on — pi-safeguard asks for shell
+        // approval through ctx.ui.select, and that has to be answerable while
+        // any other extension UI is on screen.
+        zIndex: 100,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -890,7 +908,13 @@ function ExtensionDialog({
         }}
       >
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{request.title}</div>
+          {/*
+            pre-wrap, because callers put structure in the title. pi-safeguard's
+            approval prompt is four lines — a heading, a quoted explanation, and
+            the command itself — and HTML collapsed them into one run-on
+            paragraph, burying the command being approved.
+          */}
+          <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{request.title}</div>
           <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>extension request</div>
         </div>
 
@@ -1060,6 +1084,199 @@ function renderAnsiLine(line: string, keyPrefix: string): ReactNode[] {
       ? <span key={`${keyPrefix}-${index}`} style={segment.style}>{segment.text}</span>
       : segment.text
   ));
+}
+
+/**
+ * Toggles the docked panel between watching and driving. Matches pi's TUI
+ * binding. Structurally typed so the same check serves the React synthetic
+ * event and the raw DOM one — `KeyboardEvent` is React's in this module.
+ */
+type ModifierKeyLike = { ctrlKey: boolean; metaKey: boolean; altKey: boolean; key: string };
+
+function isToggleFocusKey(e: ModifierKeyLike): boolean {
+  return e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "b";
+}
+
+/**
+ * A custom UI that asked not to capture focus.
+ *
+ * Docked above the composer rather than drawn over the transcript, because the
+ * whole point of a non-capturing overlay is that the session stays usable: the
+ * chat scrolls underneath, the composer keeps the keyboard, and a permission
+ * dialog (z-index 100) still lands on top of everything.
+ *
+ * Focus is deliberately server state. The extension can move it through its
+ * handle, so this reports intent and renders what comes back — otherwise the
+ * two copies drift the moment an extension focuses itself.
+ */
+function ExtensionDockedPanel({
+  request,
+  onInput,
+  onFocusChange,
+  onResize,
+}: {
+  request: ExtensionCustomRequest;
+  onInput: (request: ExtensionCustomRequest, data: string) => void;
+  onFocusChange: (request: ExtensionCustomRequest, flags: { focused?: boolean; hidden?: boolean }) => void;
+  onResize: (request: ExtensionCustomRequest, cols: number) => void;
+}) {
+  const bodyRef = useRef<HTMLPreElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const focused = request.focused === true;
+  const hidden = request.hidden === true;
+  const displayLines = normalizeCustomPanelLines(request.lines);
+
+  // ctrl+b is bound at the window so it works in both directions — the panel
+  // cannot hear it while the composer holds the keyboard.
+  useEffect(() => {
+    const onKeyDown = (event: Event) => {
+      const e = event as Event & ModifierKeyLike;
+      if (typeof e.key !== "string" || !isToggleFocusKey(e)) return;
+      e.preventDefault();
+      onFocusChange(request, hidden ? { hidden: false, focused: true } : { focused: !focused });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [request, focused, hidden, onFocusChange]);
+
+  useEffect(() => {
+    if (focused) bodyRef.current?.focus();
+  }, [focused]);
+
+  // Report real columns so the extension renders to the width it actually has.
+  // Character width is measured rather than assumed: the mono stack differs per
+  // platform, and being wrong here means every line wraps.
+  useEffect(() => {
+    if (hidden) return;
+    const report = () => {
+      const body = bodyRef.current;
+      const sample = measureRef.current;
+      if (!body || !sample) return;
+      const charWidth = sample.getBoundingClientRect().width / 10;
+      if (!Number.isFinite(charWidth) || charWidth <= 0) return;
+      const cols = Math.floor((body.clientWidth - 18) / charWidth);
+      if (cols > 0) onResize(request, cols);
+    };
+    report();
+    window.addEventListener("resize", report);
+    return () => window.removeEventListener("resize", report);
+  }, [request, hidden, onResize]);
+
+  if (hidden) {
+    return (
+      <button
+        type="button"
+        onClick={() => onFocusChange(request, { hidden: false })}
+        style={{
+          width: "100%",
+          marginBottom: 10,
+          padding: "5px 9px",
+          border: "1px dashed var(--border)",
+          borderRadius: 7,
+          background: "var(--bg-panel)",
+          color: "var(--text-dim)",
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        extension panel in background — click or ctrl+b to restore
+      </button>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        marginBottom: 10,
+        border: `1px solid ${focused ? "var(--accent, #6b8afd)" : "var(--border)"}`,
+        borderRadius: 7,
+        background: "var(--bg-panel)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "5px 9px",
+          borderBottom: "1px solid var(--border)",
+          color: "var(--text-dim)",
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        <span>{focused ? "panel has keyboard — ctrl+b returns it" : "ctrl+b to focus"}</span>
+        <button
+          type="button"
+          onClick={() => onFocusChange(request, { hidden: true })}
+          title="Send to background"
+          style={{
+            marginLeft: "auto",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            background: "transparent",
+            color: "var(--text-dim)",
+            fontSize: 11,
+            lineHeight: 1,
+            padding: "2px 6px",
+            cursor: "pointer",
+          }}
+        >
+          –
+        </button>
+      </div>
+
+      {/* Ten characters wide, measured to derive one column. */}
+      <span
+        ref={measureRef}
+        aria-hidden
+        style={{
+          position: "absolute",
+          visibility: "hidden",
+          whiteSpace: "pre",
+          fontSize: 12,
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        0000000000
+      </span>
+
+      <pre
+        ref={bodyRef}
+        tabIndex={0}
+        onFocus={() => { if (!focused) onFocusChange(request, { focused: true }); }}
+        onKeyDown={(e) => {
+          // ctrl+b belongs to the window handler above; forwarding it too would
+          // toggle focus twice and cancel itself out.
+          if (isToggleFocusKey(e)) return;
+          const data = toTerminalKeyData(e);
+          if (!data) return;
+          e.preventDefault();
+          onInput(request, data);
+        }}
+        style={{
+          margin: 0,
+          padding: "8px 9px",
+          maxHeight: "40vh",
+          overflowY: "auto",
+          outline: "none",
+          color: "var(--text-muted)",
+          fontSize: 12,
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        {displayLines.map((line, index) => (
+          <div key={index}>{renderAnsiLine(line, `docked-${index}`)}</div>
+        ))}
+      </pre>
+    </div>
+  );
 }
 
 function ExtensionCustomPanel({

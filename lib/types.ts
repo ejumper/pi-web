@@ -174,6 +174,16 @@ export type ExtensionUiRequest =
       method: "custom";
       lines: string[];
       closed?: boolean;
+      /**
+       * The extension asked for an overlay that does not take focus. Rendered as
+       * a docked panel above the composer rather than a modal scrim, so the
+       * session stays usable while it is on screen.
+       */
+      nonCapturing?: boolean;
+      /** Backgrounded via the handle, or by the user. Collapses to a single bar. */
+      hidden?: boolean;
+      /** Whether the panel currently owns the keyboard. */
+      focused?: boolean;
     };
 
 export type ExtensionUiResponse =

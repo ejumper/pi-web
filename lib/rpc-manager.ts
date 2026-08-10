@@ -1,6 +1,7 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
+import { clampCustomUiCols, resolveCustomUiOptions } from "./custom-ui-options";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { isNotifyEnabled } from "./notify-state";
@@ -30,6 +31,12 @@ type CustomUiComponent = {
   handleInput?: (data: string) => void;
   dispose?: () => void;
   invalidate?: () => void;
+  /**
+   * Optional. A docked panel can gain and lose the keyboard while it stays on
+   * screen, which has no equivalent in the modal path — components that care
+   * (to swap their hint line, say) implement this; the rest ignore it.
+   */
+  setFocused?: (focused: boolean) => void;
 };
 
 type ActiveCustomUi = {
@@ -37,6 +44,10 @@ type ActiveCustomUi = {
   width: number;
   resolve: (value: unknown) => void;
   settled: boolean;
+  /** From overlayOptions. Decides docked panel vs modal scrim on the client. */
+  nonCapturing: boolean;
+  hidden: boolean;
+  focused: boolean;
 };
 
 type ExtensionUiRequestBody = Record<string, unknown> & {
@@ -532,6 +543,19 @@ export class AgentSessionWrapper {
         return null;
       }
 
+      case "extension_ui_focus": {
+        this.setCustomUiFlags(command.id as string, {
+          focused: command.focused as boolean | undefined,
+          hidden: command.hidden as boolean | undefined,
+        });
+        return null;
+      }
+
+      case "extension_ui_resize": {
+        this.setCustomUiWidth(command.id as string, command.cols as number);
+        return null;
+      }
+
       case "set_auto_retry": {
         this.inner.setAutoRetryEnabled(command.enabled as boolean);
         return null;
@@ -569,15 +593,37 @@ export class AgentSessionWrapper {
     return Array.from(this.extensionWidgets.values());
   }
 
-  private getCustomUiWidth(options: unknown): number {
-    if (!options || typeof options !== "object") return 92;
-    const overlayOptions = (options as { overlayOptions?: unknown }).overlayOptions;
-    const resolved = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
-    if (!resolved || typeof resolved !== "object") return 92;
-    const width = (resolved as { width?: unknown }).width;
-    return typeof width === "number" && Number.isFinite(width)
-      ? Math.max(40, Math.min(140, Math.round(width)))
-      : 92;
+  /** Clamp a client-reported column count into the same range as the option. */
+  private setCustomUiWidth(id: string, cols: number): void {
+    const custom = this.activeCustomUis.get(id);
+    if (!custom || !Number.isFinite(cols)) return;
+    const next = clampCustomUiCols(cols);
+    if (next === custom.width) return;
+    custom.width = next;
+    this.emitCustomUiRender(id, custom);
+  }
+
+  /**
+   * Focus and hidden state live here rather than on the client, because the
+   * extension can drive both through the handle and the two must not diverge.
+   */
+  private setCustomUiFlags(id: string, flags: { hidden?: boolean; focused?: boolean }): void {
+    const custom = this.activeCustomUis.get(id);
+    if (!custom) return;
+    let changed = false;
+    if (typeof flags.hidden === "boolean" && flags.hidden !== custom.hidden) {
+      custom.hidden = flags.hidden;
+      // A hidden panel cannot hold the keyboard, or keys would vanish.
+      if (custom.hidden) custom.focused = false;
+      changed = true;
+    }
+    if (typeof flags.focused === "boolean" && !custom.hidden && flags.focused !== custom.focused) {
+      custom.focused = flags.focused;
+      changed = true;
+    }
+    if (!changed) return;
+    custom.component.setFocused?.(custom.focused);
+    this.emitCustomUiRender(id, custom);
   }
 
   private emitCustomUiRender(id: string, custom: ActiveCustomUi): void {
@@ -592,6 +638,9 @@ export class AgentSessionWrapper {
       id,
       method: "custom",
       lines,
+      nonCapturing: custom.nonCapturing,
+      hidden: custom.hidden,
+      focused: custom.focused,
     } as ExtensionUiRequest as AgentEvent;
     this.pendingUiRequests.set(id, event);
     this.emit(event);
@@ -642,7 +691,7 @@ export class AgentSessionWrapper {
     if (typeof factory !== "function") return Promise.resolve(undefined as T);
 
     const id = randomUUID();
-    const width = this.getCustomUiWidth(options);
+    const { width, nonCapturing } = resolveCustomUiOptions(options);
 
     return new Promise<T>((resolve) => {
       let completed = false;
@@ -685,9 +734,38 @@ export class AgentSessionWrapper {
             width,
             resolve: (value) => finish(value as T),
             settled: false,
+            nonCapturing,
+            hidden: false,
+            // A capturing overlay owns the keyboard from the moment it mounts,
+            // which is what the modal scrim already does. A non-capturing one
+            // starts in the background by definition.
+            focused: !nonCapturing,
           };
           this.activeCustomUis.set(id, custom);
           this.emitCustomUiRender(id, custom);
+
+          // Never called before, so extensions saw `handle` as undefined and
+          // every background/foreground call silently no-opped.
+          const onHandle = (options as { onHandle?: (handle: unknown) => void } | undefined)?.onHandle;
+          if (typeof onHandle === "function") {
+            try {
+              onHandle({
+                hide: () => this.closeCustomUi(id, undefined),
+                setHidden: (hidden: boolean) => this.setCustomUiFlags(id, { hidden }),
+                isHidden: () => this.activeCustomUis.get(id)?.hidden ?? true,
+                focus: () => this.setCustomUiFlags(id, { hidden: false, focused: true }),
+                unfocus: () => this.setCustomUiFlags(id, { focused: false }),
+                isFocused: () => this.activeCustomUis.get(id)?.focused ?? false,
+              });
+            } catch (error) {
+              this.emit({
+                type: "extension_error",
+                extensionPath: `custom-ui:${id}`,
+                event: "custom_ui_handle",
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
         })
         .catch((error) => {
           if (completed) return;
@@ -897,13 +975,36 @@ declare global {
   var __piRunningListeners: Set<(ids: string[]) => void> | undefined;
 }
 
+/**
+ * Grace period between destroying sessions and forcing the process out.
+ *
+ * `next start` handles SIGTERM by calling `server.close()` and awaiting it —
+ * and `closeAllConnections()`, which would force open sockets shut, is guarded
+ * behind `isDev` (next/dist/server/lib/start-server.js). `server.close()` waits
+ * for existing connections to end, pi-web holds one SSE stream per live tab,
+ * and an SSE stream never ends. So the await never resolves, Next's own
+ * `process.exit(143)` below it is unreachable, and the unit sits in
+ * `stop-sigterm` until systemd SIGKILLs it 90 seconds later.
+ *
+ * Leaving early is cheap: sessions append to their `.jsonl` as they stream, so
+ * the most this costs is the in-flight message — which the SIGKILL destroyed
+ * anyway, 87 seconds further on.
+ */
+const SHUTDOWN_GRACE_MS = 3000;
+
 function getRegistry(): Map<string, AgentSessionWrapper> {
   if (!globalThis.__piSessions) {
     globalThis.__piSessions = new Map();
-    const cleanup = () => globalThis.__piSessions?.forEach((s) => s.destroy());
-    process.once("exit", cleanup);
-    process.once("SIGINT", cleanup);
-    process.once("SIGTERM", cleanup);
+    const destroyAll = () => globalThis.__piSessions?.forEach((s) => s.destroy());
+    process.once("exit", destroyAll);
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => {
+        destroyAll();
+        // unref'd: if Next does manage to exit cleanly first, this timer must
+        // not be the thing keeping the process alive.
+        setTimeout(() => process.exit(signal === "SIGINT" ? 130 : 143), SHUTDOWN_GRACE_MS).unref();
+      });
+    }
   }
   return globalThis.__piSessions;
 }
