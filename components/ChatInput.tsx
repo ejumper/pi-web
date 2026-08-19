@@ -1466,133 +1466,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               overflow: "auto",
             }}
           />
-
-          {isStreaming ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end" }}>
-              {onSteer && (
-                <button
-                  onClick={() => sendQueued("steer")}
-                  disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(234,179,8,0.12)" : "none",
-                    border: "1px solid rgba(234,179,8,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(180,130,0,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
-                  </svg>
-                  Steer
-                </button>
-              )}
-              {onFollowUp && (
-                <button
-                  onClick={() => sendQueued("followup")}
-                  disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 5,
-                    padding: "7px 12px",
-                    background: canQueueStreamingMessage ? "rgba(129,140,248,0.12)" : "none",
-                    border: "1px solid rgba(129,140,248,0.35)",
-                    borderRadius: 8,
-                    color: canQueueStreamingMessage ? "rgba(99,102,241,1)" : "var(--text-dim)",
-                    cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
-                    fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em",
-                    transition: "background 0.12s",
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
-                    <line x1="2" y1="9" x2="8" y2="9" />
-                  </svg>
-                  Follow-up
-                </button>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, alignSelf: "flex-end", position: "relative" }}>
-              {micError && (
-                <div style={{
-                  position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                  padding: "5px 9px", background: "var(--bg)", border: "1px solid rgba(239,68,68,0.35)",
-                  borderRadius: 6, color: "#ef4444", fontSize: 11, whiteSpace: "nowrap",
-                  boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-                }}>
-                  {micError}
-                </div>
-              )}
-              <button
-                onClick={handleMicClick}
-                disabled={isStreaming || recordingState === "transcribing"}
-                title={recordingState === "recording" ? "Stop recording" : "Record voice message"}
-                style={{
-                  flexShrink: 0,
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                  height: 32,
-                  padding: recordingState === "recording" ? "0 10px" : 0,
-                  width: recordingState === "recording" ? undefined : 32,
-                  background: recordingState === "recording" ? "rgba(239,68,68,0.1)" : "none",
-                  border: recordingState === "recording" ? "1px solid rgba(239,68,68,0.35)" : "1px solid var(--border)",
-                  borderRadius: 8,
-                  color: recordingState === "recording" ? "#ef4444" : "var(--text-muted)",
-                  cursor: (isStreaming || recordingState === "transcribing") ? "not-allowed" : "pointer",
-                  opacity: isStreaming ? 0.5 : 1,
-                  fontSize: 12, fontFamily: "var(--font-mono)",
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-              >
-                {recordingState === "recording" ? (
-                  <>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }} />
-                    {formatRecordingTime(recordingSeconds)}
-                  </>
-                ) : recordingState === "transcribing" ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
-                    <path d="M21 12a9 9 0 1 1-5.7-8.4" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="2" width="6" height="12" rx="3" />
-                    <path d="M5 10a7 7 0 0 0 14 0" />
-                    <line x1="12" y1="19" x2="12" y2="22" />
-                  </svg>
-                )}
-              </button>
-              <button
-                onClick={handleSend}
-                disabled={!value.trim() && !attachedImages.length}
-                style={{
-                  flexShrink: 0,
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "7px 14px",
-                  background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
-                  border: "none",
-                  borderRadius: 8,
-                  color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                  cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  letterSpacing: "-0.01em",
-                  boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
-                  transition: "background 0.15s, box-shadow 0.15s",
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="2" y1="7" x2="11" y2="7" />
-                  <polyline points="7.5 3 12 7 7.5 11" />
-                </svg>
-                Send
-              </button>
-            </div>
-          )}
           </div>
         </div>
 
@@ -1600,7 +1473,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         <div style={{
           marginTop: 8,
           display: isMobile ? "grid" : "flex",
-          gridTemplateColumns: isMobile ? "minmax(0, 1fr) auto" : undefined,
+          gridTemplateColumns: isMobile ? "minmax(0, 1fr) auto auto" : undefined,
           alignItems: "center",
           gap: 6,
         }}>
@@ -2199,6 +2072,144 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </button>
             )}
             </div>
+          </div>
+
+          {/* ACTIONS: send/record (idle) or steer/follow-up (streaming) —
+              always visible, never behind the mobile "More" menu */}
+          <div style={{
+            flex: "0 0 auto",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 6,
+            position: "relative",
+          }}>
+            {isStreaming ? (
+              <>
+                {onSteer && (
+                  <button
+                    onClick={() => sendQueued("steer")}
+                    disabled={!canQueueStreamingMessage}
+                    title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
+                    aria-label="Steer"
+                    style={{
+                      flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 32, height: 32, padding: 0,
+                      background: canQueueStreamingMessage ? "rgba(234,179,8,0.12)" : "none",
+                      border: "1px solid rgba(234,179,8,0.35)",
+                      borderRadius: 8,
+                      color: canQueueStreamingMessage ? "rgba(180,130,0,1)" : "var(--text-dim)",
+                      cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
+                      transition: "background 0.12s",
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
+                    </svg>
+                  </button>
+                )}
+                {onFollowUp && (
+                  <button
+                    onClick={() => sendQueued("followup")}
+                    disabled={!canQueueStreamingMessage}
+                    title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
+                    aria-label="Follow-up"
+                    style={{
+                      flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      width: 32, height: 32, padding: 0,
+                      background: canQueueStreamingMessage ? "rgba(129,140,248,0.12)" : "none",
+                      border: "1px solid rgba(129,140,248,0.35)",
+                      borderRadius: 8,
+                      color: canQueueStreamingMessage ? "rgba(99,102,241,1)" : "var(--text-dim)",
+                      cursor: canQueueStreamingMessage ? "pointer" : "not-allowed",
+                      transition: "background 0.12s",
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
+                      <line x1="2" y1="9" x2="8" y2="9" />
+                    </svg>
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {micError && (
+                  <div style={{
+                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                    padding: "5px 9px", background: "var(--bg)", border: "1px solid rgba(239,68,68,0.35)",
+                    borderRadius: 6, color: "#ef4444", fontSize: 11, whiteSpace: "nowrap",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+                    zIndex: 60,
+                  }}>
+                    {micError}
+                  </div>
+                )}
+                <button
+                  onClick={handleMicClick}
+                  disabled={isStreaming || recordingState === "transcribing"}
+                  title={recordingState === "recording" ? "Stop recording" : "Record voice message"}
+                  aria-label={recordingState === "recording" ? "Stop recording" : "Record voice message"}
+                  style={{
+                    flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                    height: 32,
+                    padding: recordingState === "recording" ? "0 10px" : 0,
+                    width: recordingState === "recording" ? undefined : 32,
+                    background: recordingState === "recording" ? "rgba(239,68,68,0.1)" : "none",
+                    border: recordingState === "recording" ? "1px solid rgba(239,68,68,0.35)" : "1px solid var(--border)",
+                    borderRadius: 8,
+                    color: recordingState === "recording" ? "#ef4444" : "var(--text-muted)",
+                    cursor: (isStreaming || recordingState === "transcribing") ? "not-allowed" : "pointer",
+                    opacity: isStreaming ? 0.5 : 1,
+                    fontSize: 12, fontFamily: "var(--font-mono)",
+                    transition: "background 0.12s, color 0.12s, border-color 0.12s",
+                  }}
+                >
+                  {recordingState === "recording" ? (
+                    <>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }} />
+                      {formatRecordingTime(recordingSeconds)}
+                    </>
+                  ) : recordingState === "transcribing" ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
+                      <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="2" width="6" height="12" rx="3" />
+                      <path d="M5 10a7 7 0 0 0 14 0" />
+                      <line x1="12" y1="19" x2="12" y2="22" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={!value.trim() && !attachedImages.length}
+                  title="Send"
+                  aria-label="Send"
+                  style={{
+                    flexShrink: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 32, height: 32, padding: 0,
+                    background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
+                    border: "none",
+                    borderRadius: 8,
+                    color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
+                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                    boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                    transition: "background 0.15s, box-shadow 0.15s",
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="2" y1="7" x2="11" y2="7" />
+                    <polyline points="7.5 3 12 7 7.5 11" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
 
         </div>
