@@ -117,6 +117,16 @@ export function getLiveEntry(sessionId: string): LiveRegistryEntry | null {
   return readRegistry().get(sessionId) ?? null;
 }
 
+/**
+ * Cache-bypassing lookup. The live events route uses this per browser
+ * subscription: a 2s-stale scan otherwise races freshly started terminal
+ * sessions into a false "not live" verdict.
+ */
+export function getLiveEntryFresh(sessionId: string): LiveRegistryEntry | null {
+  g.__piLiveBridgeScan = undefined;
+  return readRegistry().get(sessionId) ?? null;
+}
+
 export function isLive(sessionId: string): boolean {
   return getLiveEntry(sessionId) !== null;
 }
