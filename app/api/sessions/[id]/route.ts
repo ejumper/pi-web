@@ -11,6 +11,7 @@ import {
   readSessionHeader,
 } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { isLive } from "@/lib/live-bridge";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -163,6 +164,7 @@ export async function GET(
       leafId,
       tree,
       context,
+      live: isLive(id),
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

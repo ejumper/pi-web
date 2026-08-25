@@ -421,6 +421,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  // Sessions currently live in a terminal (pi-live registry) — rendered with a LIVE badge.
+  const [liveSessionIds, setLiveSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
@@ -435,8 +437,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (showLoading) setLoading(true);
       const res = await fetch("/api/sessions");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
+      const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[]; liveSessionIds?: string[] };
       setAllSessions(data.sessions);
+      setLiveSessionIds(new Set(data.liveSessionIds ?? []));
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
       if (!sseAuthoritativeRef.current) {
@@ -482,10 +485,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     source.onmessage = (e) => {
       try {
-        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[] };
+        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; liveSessionIds?: string[] };
         if (data.type === "running") {
           sseAuthoritativeRef.current = true;
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+          if (data.liveSessionIds) setLiveSessionIds(new Set(data.liveSessionIds));
         }
       } catch {
         // ignore malformed frames
@@ -1549,6 +1553,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             node={node}
             selectedSessionId={selectedSessionId}
             runningSessionIds={runningSessionIds}
+            liveSessionIds={liveSessionIds}
             unreadSessionIds={unreadSessionIds}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
@@ -1741,6 +1746,7 @@ function SessionTreeItem({
   node,
   selectedSessionId,
   runningSessionIds,
+  liveSessionIds,
   unreadSessionIds,
   onSelectSession,
   onRenamed,
@@ -1750,6 +1756,7 @@ function SessionTreeItem({
   node: SessionTreeNode;
   selectedSessionId: string | null;
   runningSessionIds: Set<string>;
+  liveSessionIds: Set<string>;
   unreadSessionIds: Set<string>;
   onSelectSession: (s: SessionInfo) => void;
   onRenamed?: () => void;
@@ -1777,6 +1784,7 @@ function SessionTreeItem({
           session={node.session}
           isSelected={node.session.id === selectedSessionId}
           isRunning={runningSessionIds.has(node.session.id)}
+          isLive={liveSessionIds.has(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
           onClick={() => onSelectSession(node.session)}
           onRenamed={onRenamed}
@@ -1795,6 +1803,7 @@ function SessionTreeItem({
               node={child}
               selectedSessionId={selectedSessionId}
               runningSessionIds={runningSessionIds}
+              liveSessionIds={liveSessionIds}
               unreadSessionIds={unreadSessionIds}
               onSelectSession={onSelectSession}
               onRenamed={onRenamed}
@@ -1805,6 +1814,32 @@ function SessionTreeItem({
         </div>
       )}
     </div>
+  );
+}
+
+function LiveSessionIndicator() {
+  return (
+    <span
+      title="Live in a terminal"
+      aria-label="Live in terminal"
+      style={{
+        width: 14,
+        height: 14,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        color: "#16a34a",
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={{ display: "block" }}>
+        <rect x="1.5" y="2.5" width="11" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M5 12h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="7" cy="6.2" r="1.6" fill="currentColor">
+          <animate attributeName="opacity" values="1;0.25;1" dur="1.8s" repeatCount="indefinite" />
+        </circle>
+      </svg>
+    </span>
   );
 }
 
@@ -1875,6 +1910,7 @@ function SessionItem({
   session,
   isSelected,
   isRunning,
+  isLive,
   isUnread,
   onClick,
   onRenamed,
@@ -1887,6 +1923,7 @@ function SessionItem({
   session: SessionInfo;
   isSelected: boolean;
   isRunning?: boolean;
+  isLive?: boolean;
   isUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
@@ -2066,8 +2103,9 @@ function SessionItem({
                 lineHeight: 1.4,
                 color: "var(--text)",
               }}
-              title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
+              title={isLive ? `${title} · Live in terminal` : isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
             >
+              {isLive ? <LiveSessionIndicator /> : null}
               {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}

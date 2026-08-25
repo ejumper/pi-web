@@ -1,5 +1,6 @@
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
+import { isLive } from "@/lib/live-bridge";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,13 @@ export async function GET(
   // Fast path: already-running session
   let session = getRpcSession(id);
   if (!session || !session.isAlive()) {
+    // Live in a terminal? Never spawn a second agent on the same JSONL.
+    if (isLive(id)) {
+      return new Response(JSON.stringify({ error: "Session is live in a terminal", live: true }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
       return new Response("Session not found", { status: 404 });
