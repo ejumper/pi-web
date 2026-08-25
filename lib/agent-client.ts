@@ -26,3 +26,23 @@ export async function sendAgentCommand<T = unknown>(
   }
   return body.data as T;
 }
+
+// Client-side helper for the /api/live/[id]/* control surface (send/abort/
+// commands) used by terminal-live sessions. Mirrors sendAgentCommand's
+// response conventions.
+export async function sendLiveCommand<T = unknown>(
+  sessionId: string,
+  path: "send" | "abort" | "commands",
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`/api/live/${encodeURIComponent(sessionId)}/${path}`, {
+    method: path === "commands" ? "GET" : "POST",
+    headers: path === "commands" ? undefined : { "Content-Type": "application/json" },
+    body: path === "commands" ? undefined : JSON.stringify(body ?? {}),
+  });
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok || data?.error) {
+    throw new Error(data?.error ?? `HTTP ${res.status}`);
+  }
+  return data;
+}

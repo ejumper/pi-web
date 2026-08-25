@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import { sendLiveCommand } from "@/lib/agent-client";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
@@ -372,6 +373,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Entry ids already rendered from history — appended tail events with these
   // ids are duplicates (the offset-capture race) and must be dropped.
   const seenExternalEntryIdsRef = useRef<Set<string>>(new Set());
+  // Terminal-side queue visibility (boolean granularity via the bridge).
+  const [externalQueued, setExternalQueued] = useState(false);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
@@ -578,7 +581,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew, newSessionCwd, newSessionModel, newSessionDefaultModel, toolPreset, thinkingLevel]);
 
-  const loadSlashCommands = useCallback(async () => {
+  const loadSlashCommands = useCallback(async (): Promise<SlashCommandInfo[]> => {
+    // External-live sessions get their palette from the bridge, which already
+    // excludes interactive builtins and denylisted extension commands.
+    if (isExternalLiveRef.current) {
+      const sid = sessionIdRef.current;
+      if (!sid) {
+        setSlashCommands([]);
+        return [] as SlashCommandInfo[];
+      }
+      setSlashCommandsLoading(true);
+      try {
+        const data = await sendLiveCommand<{ commands: SlashCommandInfo[] }>(sid, "commands");
+        const commands = (data?.commands ?? []) as unknown as SlashCommandInfo[];
+        setSlashCommands(commands);
+        return commands;
+      } catch (e) {
+        console.error("Failed to load live slash commands:", e);
+        setSlashCommands([]);
+        return [] as SlashCommandInfo[];
+      } finally {
+        setSlashCommandsLoading(false);
+      }
+    }
     const sid = sessionIdRef.current ?? await ensureNewSession();
     if (!sid) {
       setSlashCommands([]);
@@ -1025,6 +1050,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           followUp: [...((event.followUp as string[] | undefined) ?? [])],
         });
         break;
+      case "queue_pending":
+        // Bridge-synthesized boolean queue signal for external-live sessions.
+        if (isExternalLiveRef.current) setExternalQueued(event.pending === true);
+        break;
       case "auto_retry_start":
         setRetryInfo({ attempt: event.attempt as number, maxAttempts: event.maxAttempts as number, errorMessage: event.errorMessage as string | undefined });
         break;
@@ -1060,7 +1089,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!trimmedMessage && !images?.length) return;
     if (agentRunning) return;
     if (isExternalLiveRef.current) {
-      addNotice({ type: "warning", message: "This session is live in a terminal — sending from the browser arrives in Phase 3." });
+      if (!session) return;
+      try {
+        const resp = await sendLiveCommand<{ ok: boolean; error?: string; action?: string }>(session.id, "send", { text: trimmedMessage });
+        // Refusals (interactive builtins, denylisted commands) arrive as 200 + ok:false.
+        if (resp && resp.ok === false && resp.error) {
+          addNotice({ type: "warning", message: resp.error });
+        }
+        // Success needs no optimistic bubble: the injected user message echoes
+        // back over the stream as a user message_end and appends directly.
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
       return;
     }
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
@@ -1147,7 +1187,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     if (isExternalLiveRef.current) {
-      addNotice({ type: "warning", message: "Abort from the terminal that owns this session — remote abort arrives in Phase 3." });
+      try {
+        await sendLiveCommand(sid, "abort", {});
+        setExternalQueued(false);
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
       return;
     }
     try {
@@ -1155,7 +1200,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to abort:", e);
     }
-  }, [addNotice]);
+  }, [addNotice, session]);
 
   const handleFork = useCallback(async (entryId: string) => {
     const sid = sessionIdRef.current;
@@ -1263,6 +1308,35 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
     const [, commandName, rawArgs = ""] = match;
     const args = rawArgs.trim();
+
+    // External-live sessions: only remotely-bridgeable builtins are handled
+    // here (the bridge executes them via ctx methods). Everything interactive
+    // is refused; anything unhandled falls through as a prompt, where the
+    // extension's tier routing expands skills/templates/extension commands.
+    if (isExternalLiveRef.current) {
+      const sid = sessionIdRef.current;
+      if (!sid) return { handled: true, error: "No active session" };
+      if (commandName === "compact") {
+        try {
+          await sendLiveCommand(sid, "send", { text });
+          if (args) setIsCompacting(true);
+          return { handled: true, message: "Compaction requested on terminal session" };
+        } catch (e) {
+          return { handled: true, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+      if (commandName === "name") {
+        if (!args) return { handled: true, error: "Usage: /name <name>" };
+        try {
+          await sendLiveCommand(sid, "send", { text });
+          return { handled: true, message: `Rename requested on terminal session` };
+        } catch (e) {
+          return { handled: true, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+      return { handled: true, error: `/${commandName} is an interactive terminal command — not available for live sessions` };
+    }
+
     const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
       if (!result.handled) return result;
@@ -1347,7 +1421,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     if (isExternalLiveRef.current) {
-      addNotice({ type: "warning", message: "This session is live in a terminal — steering from the browser arrives in Phase 3." });
+      try {
+        await sendLiveCommand(sid, "send", { text: message, deliverAs: "steer" });
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
       return;
     }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -1370,7 +1448,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     if (isExternalLiveRef.current) {
-      addNotice({ type: "warning", message: "This session is live in a terminal — queueing from the browser arrives in Phase 3." });
+      try {
+        await sendLiveCommand(sid, "send", { text: message, deliverAs: behavior });
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
       return;
     }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -1390,7 +1472,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     if (isExternalLiveRef.current) {
-      addNotice({ type: "warning", message: "This session is live in a terminal — follow-ups from the browser arrive in Phase 3." });
+      try {
+        await sendLiveCommand(sid, "send", { text: message, deliverAs: "followUp" });
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
       return;
     }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
@@ -1618,6 +1704,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [messages.length, contextUsage?.tokens, contextUsage?.percent, contextUsage?.contextWindow]);
 
   return {
+    isExternalLive,
+    externalQueued,
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
