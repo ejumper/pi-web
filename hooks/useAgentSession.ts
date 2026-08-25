@@ -1266,6 +1266,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid || isCompacting) return;
+    if (isExternalLiveRef.current) {
+      try {
+        await sendLiveCommand(sid, "send", { text: "/compact" });
+        addNotice({ type: "success", message: "Compaction requested on terminal session" });
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     setIsCompacting(true);
     setCompactError(null);
     setCompactResult(null);
@@ -1310,16 +1319,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const args = rawArgs.trim();
 
     // External-live sessions: only remotely-bridgeable builtins are handled
-    // here (the bridge executes them via ctx methods). Everything interactive
-    // is refused; anything unhandled falls through as a prompt, where the
-    // extension's tier routing expands skills/templates/extension commands.
+    // here (the bridge executes them via ctx methods). EVERYTHING else must
+    // fall through ({handled:false}) so it reaches the bridge's tier routing —
+    // extension commands (/guard, /read, …), skills and templates expand
+    // natively there, and interactive builtins get refused server-side with a
+    // visible notice. Swallowing them here silently blocks them (the input
+    // retains its text when a handled result carries an error).
     if (isExternalLiveRef.current) {
       const sid = sessionIdRef.current;
       if (!sid) return { handled: true, error: "No active session" };
       if (commandName === "compact") {
         try {
-          await sendLiveCommand(sid, "send", { text });
-          if (args) setIsCompacting(true);
+          await sendLiveCommand<{ ok: boolean; error?: string }>(sid, "send", { text });
           return { handled: true, message: "Compaction requested on terminal session" };
         } catch (e) {
           return { handled: true, error: e instanceof Error ? e.message : String(e) };
@@ -1328,13 +1339,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (commandName === "name") {
         if (!args) return { handled: true, error: "Usage: /name <name>" };
         try {
-          await sendLiveCommand(sid, "send", { text });
-          return { handled: true, message: `Rename requested on terminal session` };
+          await sendLiveCommand<{ ok: boolean; error?: string }>(sid, "send", { text });
+          return { handled: true, message: "Rename requested on terminal session" };
         } catch (e) {
           return { handled: true, error: e instanceof Error ? e.message : String(e) };
         }
       }
-      return { handled: true, error: `/${commandName} is an interactive terminal command — not available for live sessions` };
+      return { handled: false };
     }
 
     const sid = sessionIdRef.current ?? await ensureNewSession();
@@ -1524,12 +1535,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (level === "auto") return; // "auto" leaves pi's current setting untouched
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (!sid) return;
+    if (isExternalLiveRef.current) {
+      try {
+        await sendLiveCommand(sid, "send", { text: `/thinking ${level}` });
+      } catch (e) {
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     try {
       await sendAgentCommand(sid, { type: "set_thinking_level", level });
     } catch (e) {
       console.error("Failed to set thinking level:", e);
     }
-  }, []);
+  }, [addNotice]);
 
   const handleToolPresetChange = useCallback(async (preset: "none" | "default" | "full") => {
     const toolNames = getToolNamesForPreset(preset);

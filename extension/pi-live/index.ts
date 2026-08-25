@@ -62,6 +62,17 @@ function readDenylist(): string[] {
 	}
 }
 
+// Version-skew accessors: newer runtimes expose thinkingLevel/setThinkingLevel
+// (and a model object) on ExtensionContext; the pinned SDK types predate them.
+interface CtxThinkingExtras {
+	thinkingLevel?: string;
+	setThinkingLevel?(level: string): void;
+	model?: { provider: string; id: string };
+}
+function ctxExtras(ctx: ExtensionContext | null): CtxThinkingExtras | null {
+	return ctx ? (ctx as unknown as CtxThinkingExtras) : null;
+}
+
 export default function (pi: ExtensionAPI) {
 	let server: ReturnType<typeof createServer> | null = null;
 	let port = 0;
@@ -160,6 +171,19 @@ export default function (pi: ExtensionAPI) {
 				if (!args) return jsonResponse(res, 400, { ok: false, error: "usage: /name <name>" });
 				pi.setSessionName(args);
 				return jsonResponse(res, 200, { ok: true, action: "builtin", detail: `renamed to ${args}` });
+			}
+			if (name === "thinking") {
+				const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+				if (!args || !levels.includes(args)) {
+					return jsonResponse(res, 400, { ok: false, error: `usage: /thinking <${levels.join("|")}>` });
+				}
+				// Setters live on ExtensionAPI (runtime >= ~0.83), not the session ctx.
+				const api = pi as unknown as { setThinkingLevel?(l: string): void };
+				if (!api.setThinkingLevel) {
+					return jsonResponse(res, 500, { ok: false, error: "pi runtime too old for remote thinking switch" });
+				}
+				api.setThinkingLevel(args);
+				return jsonResponse(res, 200, { ok: true, action: "builtin", detail: `thinking level: ${args}` });
 			}
 
 			// Tier 3: known interactive-TUI builtins are never remotely runnable.
@@ -294,6 +318,10 @@ export default function (pi: ExtensionAPI) {
 				isIdle: currentCtx ? currentCtx.isIdle() : true,
 				cwd: currentCtx?.cwd,
 				name: pi.getSessionName() || undefined,
+				thinkingLevel:
+					(pi as unknown as { getThinkingLevel?: () => string }).getThinkingLevel?.() ??
+					ctxExtras(currentCtx)?.thinkingLevel,
+				model: ctxExtras(currentCtx)?.model,
 			}),
 		);
 	};
@@ -371,6 +399,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", async (event) => forward(event));
 	pi.on("agent_end", async (event) => forward(event));
 	pi.on("agent_settled", async (event) => forward(event));
+	pi.on("model_select", async (event) => forward(event));
+	pi.on("thinking_level_select", async (event) => forward(event));
 
 	pi.on("session_start", async (_event, ctx) => {
 		await setup(ctx);
