@@ -1,4 +1,5 @@
 import { getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
+import { getLiveSessionIds } from "@/lib/live-bridge";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
       // through the gap between snapshot and subscription.
       const unsubscribe = subscribeRunningSessions((ids) => {
         try {
-          encode({ type: "running", runningSessionIds: ids });
+          encode({ type: "running", runningSessionIds: ids, liveSessionIds: getLiveSessionIds() });
         } catch {
           // controller already closed
         }
@@ -25,7 +26,29 @@ export async function GET(req: Request) {
 
       // Initial snapshot so the client renders the correct state immediately.
       // (A duplicate frame here is harmless: the client just sets the same set.)
-      encode({ type: "running", runningSessionIds: getRunningRpcSessionIds() });
+      let lastLiveJson = "";
+      const initialLive = getLiveSessionIds();
+      lastLiveJson = JSON.stringify(initialLive);
+      encode({
+        type: "running",
+        runningSessionIds: getRunningRpcSessionIds(),
+        liveSessionIds: initialLive,
+      });
+
+      // Terminal sessions become live/unlive without any in-process event, so
+      // watch the registry for deltas and push when it changes.
+      const liveWatcher = setInterval(() => {
+        try {
+          const live = getLiveSessionIds();
+          const json = JSON.stringify(live);
+          if (json !== lastLiveJson) {
+            lastLiveJson = json;
+            encode({ type: "running", runningSessionIds: getRunningRpcSessionIds(), liveSessionIds: live });
+          }
+        } catch {
+          // controller already closed
+        }
+      }, 3_000);
 
       // Heartbeat to keep the connection alive through proxies/timeouts.
       const heartbeat = setInterval(() => {
@@ -38,6 +61,7 @@ export async function GET(req: Request) {
 
       const cleanup = () => {
         clearInterval(heartbeat);
+        clearInterval(liveWatcher);
         unsubscribe();
         try { controller.close(); } catch { /* already closed */ }
       };

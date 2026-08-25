@@ -25,6 +25,8 @@ export interface SessionData {
     thinkingLevel: string;
     model: { provider: string; modelId: string } | null;
   };
+  /** True when this session is owned by a running terminal pi (live-bridge registry). */
+  live?: boolean;
 }
 
 interface StreamingState {
@@ -363,6 +365,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  // External-live mode: session is owned by a terminal pi. Events come from
+  // the read-only tail route; sends are refused until Phase 3 wires the bridge.
+  const isExternalLiveRef = useRef(false);
+  const [isExternalLive, setIsExternalLive] = useState(false);
+  // Entry ids already rendered from history — appended tail events with these
+  // ids are duplicates (the offset-capture race) and must be dropped.
+  const seenExternalEntryIdsRef = useRef<Set<string>>(new Set());
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
@@ -447,6 +456,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setEntryIds(d.context.entryIds ?? []);
       setCurrentModelOverride(null);
       setError(null);
+      // External-live tracking: seed dedupe with every entry id in history so
+      // tail events for entries that landed between history-read and subscribe
+      // are dropped instead of rendered twice.
+      isExternalLiveRef.current = !!d.live;
+      setIsExternalLive(!!d.live);
+      seenExternalEntryIdsRef.current = new Set(d.context.entryIds ?? []);
       if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
         setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
       }
@@ -589,7 +604,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    const es = new EventSource(`/api/agent/${encodeURIComponent(sid)}/events`);
+    // External-live sessions stream from the read-only tail route; spawning
+    // routes would 409 (and must never fork a second agent onto the file).
+    const url = isExternalLiveRef.current
+      ? `/api/live/${encodeURIComponent(sid)}/events`
+      : `/api/agent/${encodeURIComponent(sid)}/events`;
+    const es = new EventSource(url);
     eventSourceRef.current = es;
 
     return new Promise((resolve) => {
@@ -617,10 +637,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // auto-reconnect. Settle the Promise and manually reconnect for
           // already-running sessions.
           settle("closed");
-          if (eventSourceRef.current === es && agentRunningRef.current) {
+          if (eventSourceRef.current === es && (agentRunningRef.current || isExternalLiveRef.current)) {
             eventSourceRef.current = null;
             setTimeout(() => {
-              if (agentRunningRef.current) void connectEvents(sid);
+              if (agentRunningRef.current || isExternalLiveRef.current) void connectEvents(sid);
             }, 1000);
           }
         }
@@ -921,7 +941,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // Ignore streaming events arriving after this run already finished
         // (e.g. SSE data buffered while the tab was frozen, flushed after
         // reconcile) — they would resurrect a ghost streaming bubble.
-        if (!agentRunningRef.current) break;
+        // External-live sessions are exempt: their stream is always open.
+        if (!agentRunningRef.current && !isExternalLiveRef.current) break;
         const msg = event.message as Partial<AgentMessage> | undefined;
         if (msg?.role === "user") {
           break;
@@ -935,9 +956,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "message_end": {
         // Same late-event guard: after reconcile finished this run,
         // loadSession already loaded this message from the session file —
-        // appending it again would duplicate it.
-        if (!agentRunningRef.current) break;
+        // appending it again would duplicate it. External-live sessions are
+        // exempt from the agentRunning requirement (their stream is always
+        // open) but dedupe by entry id instead.
+        if (!agentRunningRef.current && !isExternalLiveRef.current) break;
         const completed = event.message as AgentMessage | undefined;
+        if (isExternalLiveRef.current) {
+          if (!completed) break;
+          const entryId = event.entryId as string | undefined;
+          if (entryId) {
+            if (seenExternalEntryIdsRef.current.has(entryId)) break;
+            seenExternalEntryIdsRef.current.add(entryId);
+          }
+          // No optimistic-bubble reconcile here: sends into live external
+          // sessions are blocked in Phase 1, so every user message arrives
+          // from the terminal side and appends directly.
+          setMessages((prev) => [...prev, normalizeToolCalls(completed)]);
+          break;
+        }
         if (completed && completed.role === "user") {
           // Delivered steering/follow-up messages surface here as user
           // messages. The run's initial prompt also emits one, but handleSend
@@ -1023,6 +1059,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunning) return;
+    if (isExternalLiveRef.current) {
+      addNotice({ type: "warning", message: "This session is live in a terminal — sending from the browser arrives in Phase 3." });
+      return;
+    }
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
     const promptRunId = promptRunIdRef.current + 1;
 
@@ -1106,12 +1146,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    if (isExternalLiveRef.current) {
+      addNotice({ type: "warning", message: "Abort from the terminal that owns this session — remote abort arrives in Phase 3." });
+      return;
+    }
     try {
       await sendAgentCommand(sid, { type: "abort" });
     } catch (e) {
       console.error("Failed to abort:", e);
     }
-  }, []);
+  }, [addNotice]);
 
   const handleFork = useCallback(async (entryId: string) => {
     const sid = sessionIdRef.current;
@@ -1302,6 +1346,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleSteer = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    if (isExternalLiveRef.current) {
+      addNotice({ type: "warning", message: "This session is live in a terminal — steering from the browser arrives in Phase 3." });
+      return;
+    }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
       await sendAgentCommand(sid, {
@@ -1312,7 +1360,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to steer:", e);
     }
-  }, []);
+  }, [addNotice]);
 
   const handlePromptWithStreamingBehavior = useCallback(async (
     message: string,
@@ -1321,6 +1369,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   ) => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    if (isExternalLiveRef.current) {
+      addNotice({ type: "warning", message: "This session is live in a terminal — queueing from the browser arrives in Phase 3." });
+      return;
+    }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
       await sendAgentCommand(sid, {
@@ -1337,6 +1389,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
     if (!sid) return;
+    if (isExternalLiveRef.current) {
+      addNotice({ type: "warning", message: "This session is live in a terminal — follow-ups from the browser arrive in Phase 3." });
+      return;
+    }
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     try {
       await sendAgentCommand(sid, {
@@ -1347,7 +1403,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       console.error("Failed to follow up:", e);
     }
-  }, []);
+  }, [addNotice]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1435,6 +1491,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (session) {
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
+        // External-live sessions connect to the tail stream regardless of
+        // in-process running state — the agent runs in a terminal elsewhere.
+        if (isExternalLiveRef.current && !agentState?.running) {
+          void connectEvents(session.id);
+          return;
+        }
         if (agentState?.running) {
           loadTools(session.id);
           if (agentState.state?.isStreaming || agentState.state?.isPromptRunning) {
