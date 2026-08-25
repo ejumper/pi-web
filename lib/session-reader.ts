@@ -26,7 +26,18 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
     projectByCwd.set(cwd, await resolveProject(cwd));
   }));
 
-  return piSessions.map((s) => {
+  // Duplicate session ids are legal: session relocation keeps the id across
+  // copies (superseded files stay behind as frozen archives). The newest
+  // modification wins everywhere — list row AND path resolution — otherwise
+  // renders/resumes can land on a stale archive mid-conversation.
+  const byId = new Map<string, PiSessionInfo>();
+  for (const s of piSessions) {
+    const prev = byId.get(s.id);
+    if (!prev || s.modified > prev.modified) byId.set(s.id, s);
+  }
+  const canonical = [...byId.values()];
+
+  return canonical.map((s) => {
     cacheSessionPath(s.id, s.path);
     const project = s.cwd ? projectByCwd.get(s.cwd) : undefined;
     return {
