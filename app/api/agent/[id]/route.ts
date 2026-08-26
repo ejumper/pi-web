@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { resolveSessionPath } from "@/lib/session-reader";
+import { resolveSessionPath, invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
-import { isLive } from "@/lib/live-bridge";
+import { isLive, getLiveEntryFresh } from "@/lib/live-bridge";
+import { resolveRelocatedSession } from "@/lib/live-resolve";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 // POST /api/agent/[id] - Send a command to an existing session
@@ -21,7 +22,19 @@ export async function POST(
       return NextResponse.json({ success: true, data: result });
     }
 
-    const filePath = await resolveSessionPath(id);
+    let filePath = await resolveSessionPath(id);
+    if (!filePath) {
+      // Brand-new terminal sessions are invisible to the 30s list cache; the
+      // spawn-guard must still recognize them (409), never 404 a session that
+      // is registered live. Registry-hinted local resolve first (fast, covers
+      // relocations too); full rescan only as last resort for non-live ids.
+      const hintPath = getLiveEntryFresh(id)?.sessionFile;
+      if (hintPath) filePath = resolveRelocatedSession(hintPath, id);
+      if (!filePath && !isLive(id)) {
+        invalidateSessionListCache();
+        filePath = await resolveSessionPath(id);
+      }
+    }
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }

@@ -73,6 +73,43 @@ function ctxExtras(ctx: ExtensionContext | null): CtxThinkingExtras | null {
 	return ctx ? (ctx as unknown as CtxThinkingExtras) : null;
 }
 
+// ── Remote guard / read-mode state (Wave 1) ────────────────────────────────
+// Both extensions mirror every toggle into a custom session entry, so the
+// latest entry of each type IS the current state — readable from any sibling.
+// Writes go over the shared extension event bus (fire-and-forget; if the
+// counterpart extension is missing the event goes nowhere and state stays).
+const GUARD_ENTRY_TYPE = "safeguard:enabled";
+const GUARD_SET_EVENT = "safeguard:set";
+const READ_MODE_ENTRY_TYPE = "read-mode:state";
+const READ_MODE_TOGGLE_EVENT = "read-mode:toggle";
+
+function lastCustomEntryData(ctx: ExtensionContext | null, customType: string): unknown {
+	if (!ctx) return undefined;
+	try {
+		// Cast-heavy: pinned SDK types predate the custom-entry shape.
+		const branch = ctx.sessionManager.getBranch() as unknown as Array<Record<string, unknown>>;
+		let data: unknown;
+		for (const entry of branch) {
+			if (entry.type === "custom" && entry.customType === customType) data = entry.data;
+		}
+		return data;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Current /guard setting. Defaults to on (same convention as lib/safeguard.ts). */
+function guardEnabledNow(ctx: ExtensionContext | null): boolean {
+	const data = lastCustomEntryData(ctx, GUARD_ENTRY_TYPE) as { enabled?: unknown } | undefined;
+	return typeof data?.enabled === "boolean" ? data.enabled : true;
+}
+
+/** Current read-mode setting. Absent entry means write mode (read-mode's own default). */
+function readModeNow(ctx: ExtensionContext | null): "read" | "work" {
+	const data = lastCustomEntryData(ctx, READ_MODE_ENTRY_TYPE) as { mode?: unknown } | undefined;
+	return data?.mode === "read" ? "read" : "work";
+}
+
 export default function (pi: ExtensionAPI) {
 	let server: ReturnType<typeof createServer> | null = null;
 	let port = 0;
@@ -84,6 +121,21 @@ export default function (pi: ExtensionAPI) {
 	let queuePoller: ReturnType<typeof setInterval> | null = null;
 	let lastPendingKnown: boolean | null = null;
 	let currentCtx: ExtensionContext | null = null;
+
+	/** Push a full external_state snapshot to the attached viewer (if any). */
+	const pushExternalState = () => {
+		sink?.({
+			type: "external_state",
+			live: true,
+			isIdle: currentCtx ? currentCtx.isIdle() : true,
+			name: pi.getSessionName() || undefined,
+			guardEnabled: guardEnabledNow(currentCtx),
+			readMode: readModeNow(currentCtx),
+			thinkingLevel:
+				(pi as unknown as { getThinkingLevel?: () => string }).getThinkingLevel?.() ??
+				ctxExtras(currentCtx)?.thinkingLevel,
+		});
+	};
 
 	const updateStatus = () => {
 		try {
@@ -185,6 +237,57 @@ export default function (pi: ExtensionAPI) {
 				api.setThinkingLevel(args);
 				return jsonResponse(res, 200, { ok: true, action: "builtin", detail: `thinking level: ${args}` });
 			}
+			if (name === "guard") {
+				const arg = args.toLowerCase();
+				if (arg !== "on" && arg !== "off") {
+					return jsonResponse(res, 400, {
+						ok: false,
+						error: "usage: /guard <on|off>",
+						guardEnabled: guardEnabledNow(currentCtx),
+					});
+				}
+				// Equivalent to the user typing /guard on|off in the terminal — the
+				// patched pi-safeguard listens on this bus event (lib/safeguard.ts).
+				pi.events.emit(GUARD_SET_EVENT, { enabled: arg === "on" });
+				pushExternalState();
+				return jsonResponse(res, 200, {
+					ok: true,
+					action: "builtin",
+					detail: `guard ${arg}`,
+					guardEnabled: arg === "on",
+				});
+			}
+			if (name === "read" || name === "work") {
+				const target = name; // "read" | "work"
+				const commands = new Set(
+					((pi.getCommands() ?? []) as Array<{ name: string }>).map((c) => c.name.toLowerCase()),
+				);
+				if (!commands.has("read")) {
+					return jsonResponse(res, 200, {
+						ok: false,
+						action: "refused",
+						error: "/read is unavailable — read-mode extension not loaded in this session",
+					});
+				}
+				if (readModeNow(currentCtx) === target) {
+					return jsonResponse(res, 200, {
+						ok: true,
+						action: "builtin",
+						detail: `already in ${target} mode`,
+						readMode: target,
+					});
+				}
+				pi.events.emit(READ_MODE_TOGGLE_EVENT, { toggle: true });
+				// Entering read mode also flips the guard (enterRead disables it); let
+				// that settle so the pushed snapshot reports both truthfully.
+				setTimeout(pushExternalState, 50);
+				return jsonResponse(res, 200, {
+					ok: true,
+					action: "builtin",
+					detail: `${target} mode requested`,
+					readMode: target,
+				});
+			}
 
 			// Tier 3: known interactive-TUI builtins are never remotely runnable.
 			if (TUI_ONLY_BUILTINS.has(name)) {
@@ -272,15 +375,6 @@ export default function (pi: ExtensionAPI) {
 		res.socket?.unref?.();
 
 		res.write(`data: ${JSON.stringify({ type: "connected", sessionId, mode: "bridge" })}\n\n`);
-		res.write(
-			`data: ${JSON.stringify({
-				type: "external_state",
-				live: true,
-				isIdle: currentCtx ? currentCtx.isIdle() : true,
-				name: pi.getSessionName() || undefined,
-			})}\n\n`,
-		);
-
 		sink = (frame: unknown) => {
 			try {
 				res.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -288,6 +382,7 @@ export default function (pi: ExtensionAPI) {
 				sink = null; // client vanished mid-write
 			}
 		};
+		pushExternalState(); // sink now attached — snapshot reaches the new viewer
 
 		heartbeat = setInterval(() => {
 			try {
@@ -322,6 +417,8 @@ export default function (pi: ExtensionAPI) {
 					(pi as unknown as { getThinkingLevel?: () => string }).getThinkingLevel?.() ??
 					ctxExtras(currentCtx)?.thinkingLevel,
 				model: ctxExtras(currentCtx)?.model,
+				guardEnabled: guardEnabledNow(currentCtx),
+				readMode: readModeNow(currentCtx),
 			}),
 		);
 	};
@@ -401,6 +498,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_settled", async (event) => forward(event));
 	pi.on("model_select", async (event) => forward(event));
 	pi.on("thinking_level_select", async (event) => forward(event));
+	// Renames from any source (/name, session-titler, terminal UI) reach the
+	// browser as-is; the client patches its sidebar title without a refetch.
+	pi.on("session_info_changed", async (event) => forward(event));
 
 	pi.on("session_start", async (_event, ctx) => {
 		await setup(ctx);

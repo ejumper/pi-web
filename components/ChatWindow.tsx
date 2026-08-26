@@ -202,8 +202,8 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands,
-    isExternalLive, externalQueued,
+    handleToolPresetChange, handleThinkingLevelChange, handleGuardChange, handleReadModeChange, loadSlashCommands,
+    isExternalLive, externalQueued, liveRemoteState,
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
@@ -355,6 +355,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
+      liveRemoteState={liveRemoteState}
+      onGuardChange={isExternalLive ? handleGuardChange : undefined}
+      onReadModeChange={isExternalLive ? handleReadModeChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}
       retryInfo={retryInfo}

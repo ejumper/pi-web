@@ -1,6 +1,7 @@
 import { statSync, openSync, readSync, closeSync } from "fs";
-import { invalidateSessionListCache, resolveSessionPath } from "@/lib/session-reader";
-import { getLiveEntry, getLiveEntryFresh, isLive } from "@/lib/live-bridge";
+import { invalidateSessionListCache, invalidateSessionPathCache, resolveSessionPath } from "@/lib/session-reader";
+import { getLiveEntryFresh, isLive } from "@/lib/live-bridge";
+import { resolveRelocatedSession } from "@/lib/live-resolve";
 import { addBridgeSubscriber, checkBridge } from "@/lib/live-fanout";
 
 export const dynamic = "force-dynamic";
@@ -76,11 +77,19 @@ export async function GET(
 
 	// Strategy 2: tail mode (Phase 1 behavior) — requires a session file.
 	let filePath = await resolveSessionPath(id);
-	if (!filePath && !isLive(id)) {
-		// Brand-new terminal sessions are invisible to the 30s list cache.
-		// One forced rescan before giving up keeps join-latency low.
-		invalidateSessionListCache();
-		filePath = await resolveSessionPath(id);
+	if (!filePath) {
+		// Cache misses have two distinct causes with different fixes:
+		//  (a) LIVE sessions whose file is seconds old (registry alive, bridge
+		//      dead) or recently relocated — resolved locally from the registry's
+		//      recorded path, no global scan.
+		//  (b) any other brand-new session invisible to the 30s list cache —
+		//      one forced rescan keeps join-latency low.
+      const hintPath = getLiveEntryFresh(id)?.sessionFile;
+		if (!filePath && hintPath) filePath = resolveRelocatedSession(hintPath, id);
+		if (!filePath && !isLive(id)) {
+			invalidateSessionListCache();
+			filePath = await resolveSessionPath(id);
+		}
 	}
 	if (!filePath) {
 		return new Response("Session not found", { status: 404 });
@@ -88,7 +97,8 @@ export async function GET(
 	return tailMode(req, id, filePath);
 }
 
-function tailMode(req: Request, id: string, filePath: string): Response {
+function tailMode(req: Request, id: string, initialPath: string): Response {
+	let filePath = initialPath;
 	let offset = 0;
 	try {
 		offset = statSync(filePath).size;
@@ -120,6 +130,48 @@ function tailMode(req: Request, id: string, filePath: string): Response {
 			let pendingAgentEnd = false;
 			let lastAppendAt = 0;
 
+			// Relocation resilience (Wave 1): session-move may relocate the file
+			// mid-conversation. The registry snapshot's path then goes stale — the
+			// old file either vanishes or, worse, survives as a frozen archive that
+			// tails silently forever. On stat failure, re-resolve the newest copy
+			// of this session id from disk (same newest-mtime-wins logic as the
+			// list scan) and resume from its start.
+			const pathState = { lastResolveAt: 0, resolving: false };
+			const tryReResolve = () => {
+				const now = Date.now();
+				if (pathState.resolving || now - pathState.lastResolveAt < 5_000) return;
+				pathState.resolving = true;
+				pathState.lastResolveAt = now;
+				void (async () => {
+					try {
+						// Fast path: same-directory relocation (the common case).
+						const local = resolveRelocatedSession(filePath, id);
+						if (closed) return;
+						if (local && local !== filePath) {
+							filePath = local;
+							offset = 0; // fresh file: replay from its start
+							carry = "";
+							return;
+						}
+						if (local === filePath && local !== null) return; // transient stat hiccup
+						// Slow fallback: cross-directory moves. Only worth the
+						// multi-second global rescan while something still claims
+						// this session is live.
+						if (!isLive(id)) return;
+						invalidateSessionListCache();
+						invalidateSessionPathCache(id); // stale hit would short-circuit resolve
+						const next = await resolveSessionPath(id);
+						if (!closed && next && next !== filePath) {
+							filePath = next;
+							offset = 0;
+							carry = "";
+						}
+					} finally {
+						pathState.resolving = false;
+					}
+				})();
+			};
+
 			const maybeEmitAgentEnd = () => {
 				if (pendingAgentEnd && Date.now() - lastAppendAt >= AGENT_END_QUIET_MS) {
 					pendingAgentEnd = false;
@@ -130,7 +182,23 @@ function tailMode(req: Request, id: string, filePath: string): Response {
 			const poll = () => {
 				if (closed) return;
 				try {
-					const size = statSync(filePath).size;
+					let size = -1;
+					try {
+						size = statSync(filePath).size;
+					} catch {
+						// Path gone (relocated/deleted) — attempt to follow the move.
+						tryReResolve();
+					}
+					if (size === -1) {
+						maybeEmitAgentEnd();
+						return;
+					}
+					if (size < offset) {
+						// Same path but shrank/replaced: start over rather than read
+						// garbage past a shorter file.
+						offset = 0;
+						carry = "";
+					}
 					if (size > offset) {
 						lastAppendAt = Date.now();
 						const fd = openSync(filePath, "r");

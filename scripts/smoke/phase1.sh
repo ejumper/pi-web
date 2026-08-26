@@ -87,6 +87,31 @@ curl -s "${SMOKE_BASE_URL}/api/sessions" | jq -e --arg id "$SMOKE_SESSION_ID" \
   '.liveSessionIds | index($id) == null' >/dev/null \
   && smoke_pass "dead-pid registry entry swept" || smoke_fail "dead pid still advertised as live"
 
+# ── 7. Relocation mid-tail: stream follows the moved file ──────────────
+# The registry still points at the ORIGINAL path (that is the failure mode
+# this leg covers). The tail must notice stat failures, re-resolve newest-
+# copy-wins from disk, and resume from the relocated file.
+echo "── leg 7: tail follows relocated session file ──"
+make_synthetic_session
+timeout 30 curl -sN "${SMOKE_BASE_URL}/api/live/${SMOKE_SESSION_ID}/events" > "${SMOKE_WORK_DIR}/sse7.log" 2>&1 &
+SMOKE_CURL_PID=$!
+wait_for '"mode":"tail"' "${SMOKE_WORK_DIR}/sse7.log" 6 \
+  && smoke_pass "leg7: tail connected" || { smoke_fail "leg7: no tail connect"; echo "DEBUGLOG:"; ls -la "${SMOKE_WORK_DIR}/"; cat "${SMOKE_WORK_DIR}/sse7.log"; curl -s -o /dev/null -w 'direct-code:%{http_code}\n' "${SMOKE_BASE_URL}/api/live/${SMOKE_SESSION_ID}/events" --max-time 3; }
+
+append_entry "$(msg_entry reloc-before "$(cat /proc/sys/kernel/random/uuid)" user "before move")"
+wait_for '"reloc-before"' "${SMOKE_WORK_DIR}/sse7.log" 8 \
+  && smoke_pass "leg7: pre-move entry streamed" || smoke_fail "leg7: pre-move entry missing"
+
+mv "$SMOKE_FILE" "${SMOKE_FILE%.jsonl}_relocated_leg7.jsonl"
+SMOKE_FILE="${SMOKE_FILE%.jsonl}_relocated_leg7.jsonl"
+append_entry "$(msg_entry reloc-after "$(cat /proc/sys/kernel/random/uuid)" assistant "after move")"
+wait_for '"reloc-after"' "${SMOKE_WORK_DIR}/sse7.log" 25 \
+  && smoke_pass "leg7: stream followed relocation" || smoke_fail "leg7: stream lost after relocation"
+
+kill "$SMOKE_CURL_PID" 2>/dev/null; wait "$SMOKE_CURL_PID" 2>/dev/null; SMOKE_CURL_PID=""
+rm -f "${SMOKE_FILE}"
+SMOKE_FILE=""
+
 # ── summary ───────────────────────────────────────────────────────────────────
 if (( SMOKE_FAILURES )); then
   echo "── ${SMOKE_FAILURES} failure(s) ──"

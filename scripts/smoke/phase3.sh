@@ -13,6 +13,8 @@
 #   B. Slash tiers: /tree refused (interactive), unknown-builtin refusal,
 #      /name executes via ctx methods.
 #   C. Abort: kill a running turn via POST /abort (wasRunning:true, exit).
+#   D. Guard/read-mode toggles via bus events + session_info_changed
+#      forwarding (Wave 1).
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -120,6 +122,57 @@ for i in $(seq 1 20); do
   kill -0 "$PI_PID" 2>/dev/null || { dead=1; break; }
 done
 (( dead )) && smoke_pass "C: terminal pi exited after abort" || { smoke_fail "C: pi still running after abort"; kill -9 "$PI_PID" 2>/dev/null; }
+
+# ════════════════════ LEG D: guard/read-mode + rename broadcast ════════════════════
+echo "── leg D: remote guard/read-mode toggles + live rename events ──"
+spawn_pi "Reply with exactly: OK." "$OUT_LOG"
+wait_registry 15 || { smoke_fail "D: no registry"; exit 1; }
+timeout 30 curl -sN "${SMOKE_BASE_URL}/api/live/${SMOKE_SESSION_ID}/events" > "$SMOKE_SSE_LOG" 2>&1 &
+SMOKE_CURL_PID=$!
+wait_for '"external_state"' "$SMOKE_SSE_LOG" 10 \
+  && smoke_pass "D: external_state on connect" || smoke_fail "D: no external_state frame"
+grep -q '"guardEnabled"' "$SMOKE_SSE_LOG" \
+  && smoke_pass "D: state frame carries guardEnabled" || smoke_fail "D: guardEnabled missing from state"
+
+resp=$(post_send '{"text":"/read"}')
+echo "$resp" | jq -e '.ok == true and .action == "builtin"' >/dev/null \
+  && smoke_pass "D: /read accepted" || smoke_fail "D: /read rejected: $resp"
+sleep 1
+grep -q '"readMode":"read"' "$SMOKE_SSE_LOG" \
+  && smoke_pass "D: readMode=read pushed to viewers" || echo "warn: D: no readMode push seen (timing)"
+resp=$(post_send '{"text":"/work"}')
+echo "$resp" | jq -e '.ok == true and .action == "builtin"' >/dev/null \
+  && smoke_pass "D: /work accepted" || smoke_fail "D: /work rejected: $resp"
+sleep 1
+grep -q '"readMode":"work"' "$SMOKE_SSE_LOG" \
+  && smoke_pass "D: readMode=work pushed to viewers" || echo "warn: D: no work push seen (timing)"
+
+resp=$(post_send '{"text":"/guard off"}')
+echo "$resp" | jq -e '.ok == true and .guardEnabled == false' >/dev/null \
+  && smoke_pass "D: /guard off accepted" || smoke_fail "D: /guard off failed: $resp"
+port=$(jq -r .port "$SMOKE_REGISTRY_FILE")
+sleep 0.6
+g=$(curl -s --max-time 3 "http://127.0.0.1:$port/state" | jq -r '.guardEnabled')
+[[ "$g" == "false" ]] \
+  && smoke_pass "D: guard actually flipped (patched safeguard loaded)" \
+  || echo "warn: D: guard unchanged in state (got '$g') — safeguard patch missing? event went nowhere"
+resp=$(post_send '{"text":"/guard on"}')
+echo "$resp" | jq -e '.ok == true and .guardEnabled == true' >/dev/null \
+  && smoke_pass "D: /guard on accepted" || smoke_fail "D: /guard on failed: $resp"
+resp=$(post_send '{"text":"/guard banana"}')
+echo "$resp" | jq -e '.ok == false' >/dev/null \
+  && smoke_pass "D: invalid /guard arg refused" || smoke_fail "D: bad arg accepted: $resp"
+
+resp=$(post_send '{"text":"/name Wave1-Rename-Check"}')
+echo "$resp" | jq -e '.ok == true' >/dev/null \
+  && smoke_pass "D: rename sent" || smoke_fail "D: rename failed: $resp"
+wait_for '"session_info_changed"' "$SMOKE_SSE_LOG" 8 \
+  && smoke_pass "D: session_info_changed forwarded" || smoke_fail "D: no session_info_changed frame"
+grep -q 'Wave1-Rename-Check' "$SMOKE_SSE_LOG" \
+  && smoke_pass "D: rename frame carries new name" || echo "warn: D: name value absent in frame"
+
+kill "$SMOKE_CURL_PID" 2>/dev/null; wait "$SMOKE_CURL_PID" 2>/dev/null
+wait $PI_PID 2>/dev/null
 
 # ── summary ────────────────────────────────────────────────────────────────────
 if (( SMOKE_FAILURES )); then

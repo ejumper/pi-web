@@ -43,6 +43,10 @@ interface Props {
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   onThinkingLevelChange?: (level: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
+  /** Terminal-side state + controls for external-live sessions (pi-live bridge). */
+  liveRemoteState?: { name?: string; guardEnabled?: boolean; readMode?: "read" | "work"; thinkingLevel?: string } | null;
+  onGuardChange?: (enabled: boolean) => void;
+  onReadModeChange?: (mode: "read" | "work") => void;
   availableThinkingLevels?: string[] | null;
   thinkingLevelMap?: Record<string, string | null> | null;
   retryInfo?: { attempt: number; maxAttempts: number; errorMessage?: string } | null;
@@ -209,6 +213,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
+  liveRemoteState, onGuardChange, onReadModeChange,
   retryInfo, queuedMessages, onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   onBuiltinCommand,
@@ -1699,6 +1704,61 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 backdropFilter: "blur(10px)",
               } : null),
             }}>
+            {!isStreaming && onGuardChange && liveRemoteState?.guardEnabled !== undefined && (
+              <button
+                onClick={() => onGuardChange(!(liveRemoteState.guardEnabled === true))}
+                title={`Terminal safeguard: ${liveRemoteState.guardEnabled ? "ON" : "OFF"} — click to turn ${liveRemoteState.guardEnabled ? "off" : "on"}`}
+                aria-label="Toggle terminal safeguard"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: isMobile ? "0 6px" : "8px 12px",
+                  width: isMobile ? "auto" : undefined,
+                  height: 32,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: liveRemoteState.guardEnabled ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  transition: "background 0.12s, color 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill={liveRemoteState.guardEnabled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+                </svg>
+                {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{liveRemoteState.guardEnabled ? "Guard" : "Unguarded"}</span>}
+              </button>
+            )}
+            {!isStreaming && onReadModeChange && liveRemoteState?.readMode !== undefined && (
+              <button
+                onClick={() => onReadModeChange(liveRemoteState.readMode === "read" ? "work" : "read")}
+                title={`Terminal mode: ${liveRemoteState.readMode === "read" ? "READ-ONLY" : "write"} — click to switch`}
+                aria-label="Toggle terminal read-only mode"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: isMobile ? "0 6px" : "8px 12px",
+                  width: isMobile ? "auto" : undefined,
+                  height: 32,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: liveRemoteState.readMode === "read" ? "var(--accent)" : "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  transition: "background 0.12s, color 0.12s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 7v14" />
+                  <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+                </svg>
+                {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{liveRemoteState.readMode === "read" ? "READ" : "Write"}</span>}
+              </button>
+            )}
             {!isStreaming && onThinkingLevelChange && (
               <div ref={thinkingDropdownRef} style={{ position: "relative" }}>
                 <button

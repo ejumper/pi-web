@@ -370,6 +370,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // the read-only tail route; sends are refused until Phase 3 wires the bridge.
   const isExternalLiveRef = useRef(false);
   const [isExternalLive, setIsExternalLive] = useState(false);
+  // Remote-side state snapshots pushed by the pi-live bridge as external_state
+  // frames: things that live in the TERMINAL process and have no local RPC twin.
+  const [liveRemoteState, setLiveRemoteState] = useState<{
+    name?: string;
+    guardEnabled?: boolean;
+    readMode?: "read" | "work";
+    thinkingLevel?: string;
+  } | null>(null);
   // Entry ids already rendered from history — appended tail events with these
   // ids are duplicates (the offset-capture race) and must be dropped.
   const seenExternalEntryIdsRef = useRef<Set<string>>(new Set());
@@ -464,6 +472,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // are dropped instead of rendered twice.
       isExternalLiveRef.current = !!d.live;
       setIsExternalLive(!!d.live);
+      setLiveRemoteState(null); // stale terminal snapshot; fresh one arrives on connect
       seenExternalEntryIdsRef.current = new Set(d.context.entryIds ?? []);
       if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
         setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
@@ -1054,6 +1063,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // Bridge-synthesized boolean queue signal for external-live sessions.
         if (isExternalLiveRef.current) setExternalQueued(event.pending === true);
         break;
+      case "external_state": {
+        // Bridge-pushed terminal-state snapshot (connect + after tier-1 commands).
+        if (!isExternalLiveRef.current) break;
+        setLiveRemoteState({
+          name: typeof event.name === "string" && event.name ? event.name : undefined,
+          guardEnabled: typeof event.guardEnabled === "boolean" ? event.guardEnabled : undefined,
+          readMode: event.readMode === "read" || event.readMode === "work" ? event.readMode : undefined,
+          thinkingLevel: typeof event.thinkingLevel === "string" ? event.thinkingLevel : undefined,
+        });
+        break;
+      }
+      case "session_info_changed": {
+        // Renames from any terminal source (/name, session-titler). Tell the
+        // sidebar so its title updates without waiting for a rescan.
+        const nextName = typeof event.name === "string" ? event.name : undefined;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("piweb:session-renamed", {
+            detail: { sessionId: sessionIdRef.current, name: nextName },
+          }));
+        }
+        break;
+      }
       case "auto_retry_start":
         setRetryInfo({ attempt: event.attempt as number, maxAttempts: event.maxAttempts as number, errorMessage: event.errorMessage as string | undefined });
         break;
@@ -1550,6 +1581,40 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice]);
 
+  /** Flip the terminal-side safeguard as if /guard on|off was typed there. */
+  const handleGuardChange = useCallback(async (enabled: boolean) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    setLiveRemoteState((prev) => (prev ? { ...prev, guardEnabled: enabled } : prev)); // optimistic
+    try {
+      const resp = await sendLiveCommand<{ ok: boolean; error?: string }>(sid, "send", { text: `/guard ${enabled ? "on" : "off"}` });
+      if (resp && resp.ok === false && resp.error) {
+        addNotice({ type: "warning", message: resp.error });
+        setLiveRemoteState((prev) => (prev ? { ...prev, guardEnabled: !enabled } : prev));
+      }
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      setLiveRemoteState((prev) => (prev ? { ...prev, guardEnabled: !enabled } : prev));
+    }
+  }, [addNotice]);
+
+  /** Switch terminal-side read-only/write mode as if /read or /work was typed there. */
+  const handleReadModeChange = useCallback(async (mode: "read" | "work") => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    setLiveRemoteState((prev) => (prev ? { ...prev, readMode: mode } : prev)); // optimistic
+    try {
+      const resp = await sendLiveCommand<{ ok: boolean; error?: string }>(sid, "send", { text: mode === "read" ? "/read" : "/work" });
+      if (resp && resp.ok === false && resp.error) {
+        addNotice({ type: "warning", message: resp.error });
+        setLiveRemoteState((prev) => (prev ? { ...prev, readMode: mode === "read" ? "work" : "read" } : prev));
+      }
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      setLiveRemoteState((prev) => (prev ? { ...prev, readMode: mode === "read" ? "work" : "read" } : prev));
+    }
+  }, [addNotice]);
+
   const handleToolPresetChange = useCallback(async (preset: "none" | "default" | "full") => {
     const toolNames = getToolNamesForPreset(preset);
     setToolPresetState(preset);
@@ -1725,6 +1790,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     isExternalLive,
     externalQueued,
+    liveRemoteState,
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
@@ -1744,7 +1810,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
+    handleToolPresetChange, handleThinkingLevelChange, handleGuardChange, handleReadModeChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     // Subscriptions
     handleAgentEventRef,

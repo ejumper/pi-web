@@ -391,6 +391,20 @@ function PiAgentTitle() {
 
 export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions, onFileMoved }: Props) {
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
+  // Live renames from the pi-live bridge (terminal /name, session-titler):
+  // the streaming hook broadcasts a window event so the sidebar title updates
+  // without waiting for the next /api/sessions scan.
+  useEffect(() => {
+    const onLiveRename = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string | null; name?: string | null }>).detail;
+      if (!detail?.sessionId) return;
+      setAllSessions((prev) =>
+        prev.map((s) => (s.id === detail.sessionId ? { ...s, name: detail.name ?? s.name } : s)),
+      );
+    };
+    window.addEventListener("piweb:session-renamed", onLiveRename);
+    return () => window.removeEventListener("piweb:session-renamed", onLiveRename);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
