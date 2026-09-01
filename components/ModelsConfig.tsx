@@ -1098,16 +1098,15 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
 // ── Local server ─────────────────────────────────────────────────────────────
 
 // The model list is no longer hardcoded — it comes from /api/local-model,
-// which reads the catalog `addie` regenerates on every run. Adding a model to
-// addie's MODELS table is all it takes to have it appear here, on this
+// which reads the catalog write-models-catalog generates. Adding a launcher
+// symlink and re-running that is all it takes to have it appear here, on this
 // instance and (once the pi config repo is synced) on the server's too.
-type LocalModel = { key: string; alias: string; launcher: string; label: string };
+type LocalModel = { command: string; alias: string; label: string };
 type PortStatus = { running: boolean; model: string | null };
 type LocalModelStatus = {
   models: LocalModel[];
   mainPort: number;
   main: PortStatus;
-  judge: PortStatus & { alias: string; port: number };
 };
 
 // Display-only — the "clone:" prefix stays in the value posted to the API,
@@ -1118,16 +1117,15 @@ function stripVoicePrefix(id: string): string {
 
 function LocalModelsDetail() {
   const [status, setStatus] = useState<LocalModelStatus | undefined>(undefined); // undefined = not checked yet
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
-  const [startingKey, setStartingKey] = useState<string | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<string | null>(null);
+  const [startingCommand, setStartingCommand] = useState<string | null>(null);
   // Set once a start has been accepted and held until that model actually
   // shows up on the port. The request itself returns in milliseconds (it's
   // spawned detached), but the load behind it takes minutes for a big model —
   // without this the row would snap back to "Start" with nothing to show for
   // it, which reads as a failure.
-  const [awaitingKey, setAwaitingKey] = useState<string | null>(null);
+  const [awaitingCommand, setAwaitingCommand] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [noJudge, setNoJudge] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [output, setOutput] = useState<string | null>(null);
 
@@ -1147,46 +1145,46 @@ function LocalModelsDetail() {
     return () => clearInterval(interval);
   }, [checkStatus]);
 
-  // Start is fire-and-forget: addie blocks until each server reports healthy
-  // (minutes, for a big model), so the API spawns it detached and we let the
-  // 5s poll above report progress instead of awaiting a response.
-  const handleStart = useCallback(async (key: string) => {
-    setPendingKey(null);
-    setStartingKey(key);
+  // Start is fire-and-forget: the launcher blocks until the server reports
+  // healthy (minutes, for a big model), so the API spawns it detached and we
+  // let the 5s poll above report progress instead of awaiting a response.
+  const handleStart = useCallback(async (command: string) => {
+    setPendingCommand(null);
+    setStartingCommand(command);
     setError(null);
     setOutput(null);
     try {
       const res = await fetch("/api/local-model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, noJudge }),
+        body: JSON.stringify({ command }),
       });
       const d = (await res.json()) as { started?: boolean; message?: string; error?: string };
       if (!res.ok || d.error) {
         setError(d.error ?? `HTTP ${res.status}`);
       } else {
         setOutput(d.message ?? null);
-        setAwaitingKey(key);
+        setAwaitingCommand(command);
       }
     } catch (e) {
       setError(String(e));
     } finally {
-      setStartingKey(null);
+      setStartingCommand(null);
       checkStatus();
     }
-  }, [checkStatus, noJudge]);
+  }, [checkStatus]);
 
   // Clear the "starting" state once the model we asked for is actually up.
   useEffect(() => {
-    if (!awaitingKey || !status) return;
-    const target = status.models.find((m) => m.key === awaitingKey);
-    if (target && status.main.model === target.alias) setAwaitingKey(null);
-  }, [awaitingKey, status]);
+    if (!awaitingCommand || !status) return;
+    const target = status.models.find((m) => m.command === awaitingCommand);
+    if (target && status.main.model === target.alias) setAwaitingCommand(null);
+  }, [awaitingCommand, status]);
 
-  // `addie stop` is port-scoped and takes down the main model AND the judge.
+  // Stop runs the catalog's port-scoped stop command and takes down the main model.
   const handleStop = useCallback(async () => {
     setStopping(true);
-    setAwaitingKey(null);
+    setAwaitingCommand(null);
     setError(null);
     setOutput(null);
     try {
@@ -1283,11 +1281,9 @@ function LocalModelsDetail() {
   })();
 
   const mainRunning = !!status?.main.running;
-  const judgeRunning = !!status?.judge.running;
-  // Fall back to the documented defaults only for the brief pre-first-poll
-  // render; once status arrives the catalog's own values win.
+  // Fall back to the documented default only for the brief pre-first-poll
+  // render; once status arrives the catalog's own value wins.
   const mainPort = status?.mainPort ?? 8080;
-  const judgePort = status?.judge.port ?? 7979;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1302,57 +1298,38 @@ function LocalModelsDetail() {
       </div>
 
       <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        Runs <code>addie &lt;model&gt;</code> — identical to running it from a terminal. That starts the main model on port {mainPort} <em>and</em> the judge instance on port {judgePort} together. Starting a model replaces whichever is currently running (only one at a time per port); Stop takes down both.
+        Runs <code>&lt;command&gt;</code> directly — identical to running it from a terminal. Each command starts a single model on port {mainPort}; starting one replaces whichever is currently running (only one at a time). Stop takes it down.
       </p>
-
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
-        <input type="checkbox" checked={noJudge} onChange={(e) => setNoJudge(e.target.checked)} />
-        Start main model only (<code>--no-judge</code>)
-      </label>
-
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-        padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
-        background: judgeRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
-      }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-          <span style={{ fontSize: 12, color: "var(--text)" }}>Judge · port {judgePort}</span>
-          <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-            {status === undefined ? "checking…" : judgeRunning ? (status.judge.model ?? status.judge.alias) : "not running"}
-          </span>
-        </div>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: judgeRunning ? "#4ade80" : "var(--border)", display: "inline-block", flexShrink: 0 }} />
-      </div>
 
       {status !== undefined && status.models.length === 0 && (
         <p style={{ margin: 0, fontSize: 12, color: "#fbbf24", lineHeight: 1.5 }}>
-          No model catalog found. It&apos;s written to <code>~/.pi/agent/pi-web-local-models.json</code> every time <code>addie</code> runs — run <code>addie models</code> on the desktop, then sync the pi config repo to this machine.
+          No model catalog found. It&apos;s written to <code>~/.pi/agent/pi-web-local-models.json</code> by <code>write-models-catalog</code> — run it on the desktop, then sync the pi config repo to this machine.
         </p>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {(status?.models ?? []).map((m) => {
-          // The running server reports the launcher's -a alias, not addie's key.
+          // The running server reports the launcher's -a alias, not the command.
           const isRunning = status?.main.model === m.alias;
-          const isPending = pendingKey === m.key;
-          const isStarting = startingKey === m.key || awaitingKey === m.key;
-          const disabled = (startingKey !== null && !isStarting) || stopping;
+          const isPending = pendingCommand === m.command;
+          const isStarting = startingCommand === m.command || awaitingCommand === m.command;
+          const disabled = (startingCommand !== null && !isStarting) || stopping;
           return (
-            <div key={m.key} style={{
+            <div key={m.command} style={{
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
               padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6,
               background: isRunning ? "rgba(74,222,128,0.06)" : "var(--bg-panel)",
             }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12, color: "var(--text)" }}>{m.label}</span>
-                <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>addie {m.key} · {m.alias}</span>
+                <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{m.command} · {m.alias}</span>
               </div>
 
               {isRunning ? (
                 <button
                   onClick={handleStop}
                   disabled={stopping}
-                  title="Stop the main model and the judge"
+                  title="Stop the main model"
                   style={{
                     display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
                     padding: "5px 10px", background: "none", border: "1px solid rgba(74,222,128,0.35)", borderRadius: 5,
@@ -1382,13 +1359,13 @@ function LocalModelsDetail() {
               ) : isPending ? (
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button
-                    onClick={() => setPendingKey(null)}
+                    onClick={() => setPendingCommand(null)}
                     style={{ padding: "5px 10px", background: "none", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={() => handleStart(m.key)}
+                    onClick={() => handleStart(m.command)}
                     style={{ padding: "5px 10px", background: "var(--accent)", border: "none", borderRadius: 5, color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}
                   >
                     Confirm start
@@ -1396,7 +1373,7 @@ function LocalModelsDetail() {
                 </div>
               ) : (
                 <button
-                  onClick={() => setPendingKey(m.key)}
+                  onClick={() => setPendingCommand(m.command)}
                   disabled={disabled}
                   style={{
                     padding: "5px 12px", background: "none", border: "1px solid var(--border)", borderRadius: 5,
