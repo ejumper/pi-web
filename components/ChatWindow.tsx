@@ -11,6 +11,7 @@ import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAg
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useStreamingSpacer } from "@/hooks/useStreamingSpacer";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
   captureScrollDistance,
@@ -39,6 +40,9 @@ interface Props {
   onToggleFileIncluded?: () => void;
   /** Ready "@path " text to silently prepend to the next outgoing prompt, or null. */
   pendingFileMention?: string | null;
+  /** Search term arriving via ?q= — auto-sent once into the new session, then cleared. */
+  pendingQuery?: string | null;
+  onQueryConsumed?: () => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -145,7 +149,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, hasOpenFile, fileIncluded, onToggleFileIncluded, pendingFileMention }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, hasOpenFile, fileIncluded, onToggleFileIncluded, pendingFileMention, pendingQuery, onQueryConsumed }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -210,6 +214,40 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   });
   latestMessagesRef.current = messages;
   latestEntryIdsRef.current = entryIds;
+
+  // Below-transcript spacer: sized to the shortfall, not a fixed viewport, so the
+  // end of the scroll range stays on the last line of content while the run is
+  // in flight. See hooks/useStreamingSpacer.
+  const streamSpacerRef = useStreamingSpacer(agentRunning, scrollContainerRef, lastUserMsgRef);
+
+  // ?q= auto-send. Waited for the new session's default model to resolve so the
+  // query runs against the same model the composer would have shown. If the
+  // model list never lands (slow or failed /api/models) we still send after a
+  // beat — pi falls back to the settings default, which is the same model.
+  const queryFiredRef = useRef(false);
+  useEffect(() => {
+    const query = pendingQuery?.trim();
+    if (!query || queryFiredRef.current) return;
+    if (!isNew || agentRunning) return;
+
+    let cancelled = false;
+    const fire = () => {
+      if (cancelled || queryFiredRef.current) return;
+      queryFiredRef.current = true;
+      onQueryConsumed?.();
+      void handleSend(query);
+    };
+
+    if (displayModelValue) {
+      fire();
+      return;
+    }
+    const timer = setTimeout(fire, 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pendingQuery, isNew, agentRunning, displayModelValue, handleSend, onQueryConsumed]);
 
   // Silently prepend the active file's @mention to whatever's actually being
   // sent (never to an empty/image-only send with no typed text), so it rides
@@ -697,9 +735,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               </div>
             )}
 
-            {agentRunning && (
-              <div style={{ height: scrollContainerRef.current ? scrollContainerRef.current.clientHeight : "80vh" }} />
-            )}
+            {agentRunning && <div ref={streamSpacerRef} style={{ height: 0 }} />}
 
             <div ref={messagesEndRef} />
             </div>

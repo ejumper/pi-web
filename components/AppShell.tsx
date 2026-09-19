@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, type AnimationEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -179,6 +179,32 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  // Desktop full-width editor. Below the mobile breakpoint the panel is already a
+  // full-viewport overlay; this brings that layout to wider viewports where the
+  // default is a 42% split. Reset on close so the panel always comes back split.
+  //
+  // The expanding/collapsing states exist to keep the animation clean: the panel
+  // is lifted out of the flex row into a fixed overlay and a spacer holds its slot
+  // for the duration, so the chat never reflows underneath it. Returning the
+  // panel to flow and dropping the spacer both happen at animation end, where the
+  // two widths coincide and the swap is invisible.
+  const [panelMode, setPanelMode] = useState<"split" | "expanding" | "full" | "collapsing">("split");
+  const editorFullWidth = panelMode === "expanding" || panelMode === "full";
+
+  const toggleEditorFullWidth = useCallback(() => {
+    setPanelMode((m) => (m === "full" || m === "expanding" ? "collapsing" : "expanding"));
+  }, []);
+
+  // Only the panel's own animation counts -- child animations bubble here and
+  // would cut the transition short.
+  const handlePanelAnimationEnd = useCallback((e: AnimationEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    setPanelMode((m) => (m === "expanding" ? "full" : m === "collapsing" ? "split" : m));
+  }, []);
+
+  useEffect(() => {
+    if (!rightPanelOpen) setPanelMode("split");
+  }, [rightPanelOpen]);
   // Live CM6 view per open tab (only present while that tab's editor is
   // mounted, i.e. open and in Raw/source view) — keyed by tab id since every
   // open tab stays mounted simultaneously. Imperative-only (ref, not state):
@@ -200,6 +226,49 @@ export function AppShell() {
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !searchParams.get("session"));
+
+  // ?q=<query> — search-engine entry point. Lets pi-web be added to Brave (or
+  // any browser) as a custom search engine with URL `.../?q=%s`: the term opens a
+  // new session in the default workspace with the default model and runs there.
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const queryEntryHandledRef = useRef(false);
+
+  useEffect(() => {
+    // ?session= wins — a restored session must never re-run a query.
+    if (initialSessionId || queryEntryHandledRef.current) return;
+    const query = (searchParams.get("q") ?? searchParams.get("query") ?? "").trim();
+    if (!query) return;
+    queryEntryHandledRef.current = true;
+
+    // Strip the param before anything else. Left in place, every later remount
+    // (back/forward, Suspense remount, hot reload) would submit the query again.
+    router.replace("/", { scroll: false });
+
+    // Brave won't send more than a couple of thousand chars in practice; the cap
+    // is just a guard against a pathological URL ending up as a giant prompt.
+    const MAX_QUERY_CHARS = 8000;
+    if (query.length > MAX_QUERY_CHARS) {
+      console.warn(`[pi-web] ?q= truncated from ${query.length} to ${MAX_QUERY_CHARS} chars`);
+    }
+
+    void (async () => {
+      let cwd: string | null = null;
+      try {
+        const res = await fetch("/api/default-cwd", { method: "POST" });
+        const data = await res.json() as { cwd?: string; error?: string };
+        if (res.ok && data.cwd) cwd = data.cwd;
+        else console.error("[pi-web] default-cwd failed:", data.error ?? `HTTP ${res.status}`);
+      } catch (e) {
+        console.error("[pi-web] default-cwd request failed:", e);
+      }
+      if (!cwd) return;
+      setSelectedSession(null);
+      setNewSessionCwd(cwd);
+      setSessionKey((k) => k + 1);
+      setPendingQuery(query.slice(0, MAX_QUERY_CHARS));
+    })();
+  }, [searchParams, initialSessionId, router]);
+
   // Suppresses sessionKey bump in handleCwdChange during the initial URL restore
   const suppressCwdBumpRef = useRef(false);
 
@@ -1183,6 +1252,8 @@ export function AppShell() {
               fileIncluded={activeFileIncluded}
               onToggleFileIncluded={handleToggleFileIncluded}
               pendingFileMention={pendingFileMention}
+              pendingQuery={pendingQuery}
+              onQueryConsumed={() => setPendingQuery(null)}
             />
           ) : showPlaceholder ? (
             activeCwd ? (
@@ -1207,10 +1278,20 @@ export function AppShell() {
         </div>
       </div>
 
+      {/* Holds the panel's slot in the flex row while it is a fixed overlay, so
+          the chat's layout never changes mid-animation. */}
+      {panelMode !== "split" && <div className="right-panel-spacer" />}
+
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div
         ref={rightPanelContainerRef}
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
+        onAnimationEnd={handlePanelAnimationEnd}
+        className={[
+          "right-panel-container",
+          rightPanelOpen ? "right-panel-open" : "right-panel-closed",
+          editorFullWidth ? "right-panel-full" : "",
+          panelMode === "collapsing" ? "right-panel-collapsing" : "",
+        ].join(" ")}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1266,6 +1347,38 @@ export function AppShell() {
         </div>
       </div>
     </div>
+    {/* Full-width editor toggle — only meaningful while the panel is open and
+        actually sharing the screen with the chat, so it never shows on mobile
+        (already full width) or when the panel is closed. Sits immediately left
+        of the open/close toggle. */}
+    {rightPanelOpen && !isMobile && (
+      <button
+        onClick={toggleEditorFullWidth}
+        title={editorFullWidth ? "Return to split view" : "Expand editor to full width"}
+        aria-label={editorFullWidth ? "Return to split view" : "Expand editor to full width"}
+        aria-pressed={editorFullWidth}
+        style={{
+          position: "fixed", top: 0, right: 36, zIndex: 300,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: 36, height: 36, padding: 0,
+          background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
+          color: editorFullWidth ? "var(--accent)" : "var(--text-muted)",
+          cursor: "pointer", transition: "color 0.12s",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = editorFullWidth ? "var(--accent)" : "var(--text-muted)"; }}
+      >
+        {/* One arrow, mirrored — guarantees the two states match. */}
+        <svg
+          width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ transform: editorFullWidth ? "scaleX(-1)" : undefined }}
+        >
+          <line x1="19" y1="12" x2="5" y2="12" />
+          <polyline points="12 19 5 12 12 5" />
+        </svg>
+      </button>
+    )}
     {/* File panel toggle — always visible at top-right */}
     <button
       onClick={() => setRightPanelOpen((v) => !v)}

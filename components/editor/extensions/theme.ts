@@ -38,14 +38,22 @@ export function piEditorTheme(): Extension {
       paddingRight: "1em",
     },
     ".cm-activeLine": {
-      background: "var(--bg-hover)",
+      // Translucent on purpose -- see the --active-line-bg note in globals.css.
+      // The selection layer sits at z-index -1, under the content, so an opaque
+      // background here hides the selection on the line the cursor is on.
+      background: "var(--active-line-bg)",
     },
     ".cm-activeLineGutter": {
       background: "var(--bg-hover)",
       color: "var(--text-dim)",
     },
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {
-      background: "var(--bg-selected) !important",
+      background: "var(--selection-bg) !important",
+    },
+    // Find-in-editor matches: amber, so they stay distinguishable from the real
+    // selection when both are on screen.
+    ".cm-selectionMatch": {
+      background: "var(--selection-match-bg)",
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--text)",

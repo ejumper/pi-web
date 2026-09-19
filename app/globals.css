@@ -19,6 +19,12 @@
 }
 
 :root {
+  /* The desktop split width, mirrored from .right-panel-container.right-panel-open
+     (42% of a full-viewport flex row, floored at 300px). Used by the spacer and
+     the expand/collapse keyframes so both ends of the animation line up with the
+     real in-flow width. */
+  --rp-split-w: max(42vw, 300px);
+
   --bg: #ffffff;
   --bg-panel: #f5f5f5;
   --bg-hover: #eeeeee;
@@ -33,6 +39,17 @@
   --assistant-bg: #ffffff;
   --tool-bg: #f9fafb;
   --bg-subtle: rgba(0,0,0,0.03);
+  /* Classic editor selection blue (VS Code light). Deliberately separate from
+     --bg-selected, which stays a neutral grey for selected rows/menus: as a grey
+     it was indistinguishable from the editor's active-line band. */
+  --selection-bg: #add6ff;
+  --selection-match-bg: rgba(234, 179, 8, 0.30);
+  /* Must stay translucent: CodeMirror mounts the selection layer at z-index -1
+     (layer({above:false}) -> zIndex -1-pos), i.e. BELOW the content. An opaque
+     active-line background paints over the selection on the cursor's line and
+     makes it vanish. CM's own defaults are #cceeff44 / #99eeff33 for the same
+     reason. These mix down to --bg-hover over --bg. */
+  --active-line-bg: rgba(0, 0, 0, 0.07);
 }
 
 html.dark {
@@ -50,6 +67,13 @@ html.dark {
   --assistant-bg: #1a1a1a;
   --tool-bg: #1f2937;
   --bg-subtle: rgba(255,255,255,0.04);
+  /* VS Code dark. Note --user-bg (#1e293b) is *darker* than the active-line
+     band (#2e2e2e), so reusing it would make the selection read as a shadow. */
+  --selection-bg: #264f78;
+  --selection-match-bg: rgba(234, 179, 8, 0.22);
+  /* See the light-mode note: translucent so the selection layer underneath
+     still reads through. Mixes to --bg-hover (#2e2e2e) over --bg (#1a1a1a). */
+  --active-line-bg: rgba(255, 255, 255, 0.085);
 }
 
 /* Theme toggle: circular wipe via View Transitions API.
@@ -107,6 +131,14 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-dim);
+}
+
+/* Selection colour for everything outside CodeMirror (composer textarea, message
+   text, file trees). The UA `Highlight` varies per platform and is often close to
+   our panel greys, so pin it to the same blue the editor uses. */
+::selection {
+  background: var(--selection-bg);
+  color: var(--text);
 }
 
 :root {
@@ -599,6 +631,69 @@ span.linenumber {
   .right-panel-container > * {
     width: 42vw;
     min-width: 300px;
+  }
+  /* Full-width editor. The panel leaves the flex row and overlays the whole
+     viewport, the same layout the mobile block below uses.
+
+     The animation is only clean because .right-panel-spacer holds the panel's
+     slot while it is out of flow. Without it the chat reflows the instant the
+     panel goes fixed -- that is the "panel closes, then the editor expands
+     underneath it" jump. With it the chat's layout never changes and the panel
+     simply grows over the top. */
+  .right-panel-spacer {
+    flex: 0 0 auto;
+    width: var(--rp-split-w);
+    align-self: stretch;
+  }
+
+  /* Animations drive width here, so kill the container's own width transition to
+     stop the two fighting over the same property. */
+  .right-panel-container.right-panel-full,
+  .right-panel-container.right-panel-collapsing {
+    transition: none;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    min-width: 0;
+    z-index: 250;
+  }
+  .right-panel-container.right-panel-full {
+    width: 100vw;
+    animation: rp-expand 0.2s ease;
+  }
+  .right-panel-container.right-panel-full > * {
+    width: 100vw;
+    min-width: 0;
+  }
+  /* Collapse runs the panel back down to exactly the slot width it is about to
+     return to, so swapping it back into flow when the animation ends is a
+     visual no-op. */
+  .right-panel-container.right-panel-collapsing {
+    width: var(--rp-split-w);
+    animation: rp-collapse 0.2s ease;
+  }
+  .right-panel-container.right-panel-collapsing > * {
+    width: var(--rp-split-w);
+    min-width: 0;
+  }
+}
+
+@keyframes rp-expand {
+  from { width: var(--rp-split-w); }
+  to   { width: 100vw; }
+}
+
+@keyframes rp-collapse {
+  from { width: 100vw; }
+  to   { width: var(--rp-split-w); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .right-panel-container.right-panel-full,
+  .right-panel-container.right-panel-collapsing {
+    animation-duration: 0.001ms;
   }
 }
 

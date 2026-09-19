@@ -964,12 +964,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "prompt_error":
         addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
         break;
-      case "extension_error":
-        addNotice({
-          type: "error",
-          message: (event.error as string | undefined) ?? "Extension command failed",
-        });
+      case "extension_error": {
+        // The event carries extensionPath and the hook name alongside the error.
+        // Showing only the message makes these unattributable — "ctx.x is not a
+        // function" says nothing about which of a dozen extensions threw, or when.
+        const extPath = (event.extensionPath as string | undefined) ?? "";
+        const hook = (event.event as string | undefined) ?? "";
+        const detail = (event.error as string | undefined) ?? "Extension command failed";
+        const label = extPath ? extPath.split("/").pop() || extPath : "extension";
+        const where = hook ? `${label} · ${hook}` : label;
+        console.error(`[pi-web] extension error [${where}]:`, detail);
+        addNotice({ type: "error", message: `[${where}] ${detail}` });
         break;
+      }
       case "message_start":
       case "message_update": {
         // Ignore streaming events arriving after this run already finished

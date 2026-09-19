@@ -859,7 +859,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           setSlashMenuOpen(false);
           return;
         }
-        if ((e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && filteredSlashCommands[slashActiveIndex]) {
+        // Mobile: return stays a plain newline; menu items are chosen by tap
+        // or the send button, never by Enter.
+        if (!isMobile && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && filteredSlashCommands[slashActiveIndex]) {
           e.preventDefault();
           applySlashCommand(filteredSlashCommands[slashActiveIndex]);
           return;
@@ -884,7 +886,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           setAtMenuOpen(false);
           return;
         }
-        if ((e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && atMatches[atActiveIndex]) {
+        // Mobile: return stays a plain newline; matches are chosen by tap
+        // or the send button, never by Enter.
+        if (!isMobile && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) && atMatches[atActiveIndex]) {
           e.preventDefault();
           applyAtCompletion(atMatches[atActiveIndex]);
           return;
@@ -898,7 +902,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         return;
       }
 
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Mobile keyboards have no Shift, so Enter never sends there — it
+      // keeps the textarea's native newline and sending goes through the
+      // send / steer / follow-up buttons.
+      if (e.key === "Enter" && !e.shiftKey && !isMobile) {
         e.preventDefault();
         if (isStreaming && (onSteer || onFollowUp)) {
           // Default Enter sends as steer if available, else followup
@@ -908,7 +915,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
     },
-    [isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion]
+    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion]
   );
 
   const handleInput = useCallback(() => {
@@ -1438,6 +1445,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               updateAtQuery(el.value, el.selectionStart);
             }}
             onKeyDown={handleKeyDown}
+            enterKeyHint="enter"
             onCompositionStart={() => {
               isComposingRef.current = true;
             }}

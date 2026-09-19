@@ -35,3 +35,23 @@ test("keeps local file markdown links in the app", () => {
   assert.match(html, /<a href="components\/MarkdownBody\.tsx">file<\/a>/);
   assert.doesNotMatch(html, /target=|rel=|\snode=/);
 });
+
+test("dollar amounts are not parsed as inline math", () => {
+  const html = renderMarkdown(
+    "**Claude Pro is $20/month when billed monthly** (or $17/month, billed annually at $200/year).",
+  );
+
+  // Regression: with remark-math's default singleDollarTextMath the span between
+  // the first two `$` became one KaTeX formula — italic serif glyphs, the `**`
+  // rendered literally, and one <span> per character on copy/paste.
+  assert.doesNotMatch(html, /katex/i);
+  assert.match(html, /<strong>Claude Pro is \$20\/month when billed monthly<\/strong>/);
+  assert.match(html, /\$17\/month/);
+  assert.match(html, /\$200\/year/);
+});
+
+test("$$ display math still renders", () => {
+  const html = renderMarkdown("$$\n\\int_0^1 x^2\\,dx = \\frac{1}{3}\n$$");
+
+  assert.match(html, /class="katex-display"/);
+});
