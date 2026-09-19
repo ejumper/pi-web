@@ -47,6 +47,7 @@ app/api/
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
   agent/running/events/route.ts   GET SSE stream of currently-running session ids
+  attachments/route.ts            POST { file } — generic chat attachment upload → /tmp/pi-clipboard-<uuid>.<ext>
   auth/all-providers/route.ts     GET API-key provider list
   auth/api-key/[provider]/route.ts GET/POST/DELETE provider API key status/storage
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
