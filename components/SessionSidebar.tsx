@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
+import { getFileDirectory } from "@/lib/file-paths";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 
 declare global {
@@ -448,6 +449,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
+  // Directory the explorer is showing, when it is *not* the session cwd. Null
+  // means "follow the session cwd". Only the "up one directory" button moves
+  // this; selecting a session/project resets it (see the effect below).
+  const [explorerRoot, setExplorerRoot] = useState<string | null>(null);
+  const [explorerUpBusy, setExplorerUpBusy] = useState(false);
+  const [explorerUpError, setExplorerUpError] = useState<string | null>(null);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
@@ -560,6 +567,48 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     if (explorerRefreshKey !== undefined) setExplorerKey((k) => k + 1);
   }, [explorerRefreshKey]);
+
+  // The directory the explorer is actually showing: the session cwd, unless
+  // "up one directory" moved it. Distinct from the session cwd on purpose —
+  // this never changes what a session runs in, it only widens the browser panel.
+  const explorerSessionCwd = selectedCwd ?? selectedCwdProp ?? null;
+  const explorerShownRoot = explorerRoot ?? explorerSessionCwd;
+  // getFileDirectory("/") comes back "" (its trailing-slash strip empties the
+  // path), so "can go up" needs a non-empty parent that differs from the
+  // current root — otherwise the button would be live at the filesystem root
+  // and try to navigate to "".
+  const explorerParent = explorerShownRoot ? getFileDirectory(explorerShownRoot) : "";
+  const explorerCanGoUp = Boolean(explorerParent && explorerParent !== explorerShownRoot);
+
+  // Selecting a different session/project snaps the explorer back to that
+  // session's cwd. The escape hatch is per-view, not sticky across projects.
+  useEffect(() => {
+    setExplorerRoot(null);
+    setExplorerUpError(null);
+  }, [explorerSessionCwd]);
+
+  const handleExplorerUp = useCallback(async () => {
+    if (!explorerShownRoot || !explorerCanGoUp) return;
+    const parent = explorerParent;
+    setExplorerUpBusy(true);
+    setExplorerUpError(null);
+    try {
+      // The explorer allow-list won't list a directory it hasn't been told
+      // about, so widen it before pointing the tree at the parent.
+      const res = await fetch("/api/browse/allow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: parent }),
+      });
+      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setExplorerRoot(data.path ?? parent);
+    } catch (err) {
+      setExplorerUpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExplorerUpBusy(false);
+    }
+  }, [explorerShownRoot, explorerCanGoUp, explorerParent]);
 
   useEffect(() => {
     fetch("/api/home").then((r) => r.json()).then((d: {
@@ -1688,8 +1737,46 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </button>
             {explorerOpen && (
               <button
+                onClick={() => void handleExplorerUp()}
+                disabled={!explorerCanGoUp || explorerUpBusy}
+                title={
+                  explorerCanGoUp
+                    ? `Up one directory (to ${explorerParent})`
+                    : "Already at the top level"
+                }
+                aria-label="Up one directory"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 26, height: 26, padding: 0,
+                  background: "none",
+                  border: "none",
+                  color: explorerUpError ? "#f87171" : "var(--text-dim)",
+                  cursor: !explorerCanGoUp || explorerUpBusy ? "default" : "pointer",
+                  borderRadius: 5,
+                  flexShrink: 0,
+                  opacity: explorerCanGoUp && !explorerUpBusy ? 1 : 0.4,
+                  transition: "color 0.3s, background 0.3s",
+                }}
+                onMouseEnter={(e) => {
+                  if (!explorerCanGoUp || explorerUpBusy) return;
+                  e.currentTarget.style.color = "var(--text-muted)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = explorerUpError ? "#f87171" : "var(--text-dim)";
+                  e.currentTarget.style.background = "none";
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: explorerUpBusy ? 0.5 : 1 }} aria-hidden="true">
+                  <path d="M12 19V5" />
+                  <path d="m5 12 7-7 7 7" />
+                </svg>
+              </button>
+            )}
+            {explorerOpen && (
+              <button
                 onClick={() => fileExplorerRef.current?.startCreate("file")}
-                title="New file in project root"
+                title={explorerShownRoot ? `New file in ${explorerShownRoot}` : "New file"}
                 aria-label="New file"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -1716,7 +1803,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {explorerOpen && (
               <button
                 onClick={() => fileExplorerRef.current?.startCreate("dir")}
-                title="New folder in project root"
+                title={explorerShownRoot ? `New folder in ${explorerShownRoot}` : "New folder"}
                 aria-label="New folder"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -1743,7 +1830,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               <button
                 onClick={() => fileExplorerRef.current?.openUploadPicker()}
                 disabled={explorerUploadBusy}
-                title="Upload files to project root"
+                title={explorerShownRoot ? `Upload files to ${explorerShownRoot}` : "Upload files"}
                 aria-label="Upload files"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -1801,11 +1888,36 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               )}
             </button>
           </div>
+          {explorerOpen && explorerUpError && (
+            <div
+              role="alert"
+              style={{
+                display: "flex", alignItems: "flex-start", gap: 6,
+                padding: "4px 10px", fontSize: 10, lineHeight: 1.35,
+                color: "#f87171", borderTop: "1px solid var(--border)",
+                overflowWrap: "anywhere",
+              }}
+            >
+              <span style={{ minWidth: 0, flex: 1 }}>{`Couldn\u2019t open that folder: ${explorerUpError}`}</span>
+              <button
+                type="button"
+                onClick={() => setExplorerUpError(null)}
+                aria-label="Dismiss error"
+                style={{ width: 18, height: 18, padding: 0, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: "none", borderRadius: 3, background: "none", color: "var(--text-dim)", cursor: "pointer" }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <path d="m6 6 12 12" />
+                  <path d="m18 6-12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
           {explorerOpen && (
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
               <FileExplorer
                 ref={fileExplorerRef}
                 cwd={selectedCwd ?? selectedCwdProp!}
+                root={explorerShownRoot ?? undefined}
                 onOpenFile={onOpenFile ?? (() => {})}
                 refreshKey={explorerKey}
                 onAtMention={onAtMention}

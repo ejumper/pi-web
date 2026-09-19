@@ -252,9 +252,17 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   // Silently prepend the active file's @mention to whatever's actually being
   // sent (never to an empty/image-only send with no typed text), so it rides
   // along on every send path the same way a manually-typed @mention would.
+  //
+  // The mention goes on its own line rather than inline ahead of the prompt:
+  // `@path ` already carries a trailing space, so concatenating directly puts
+  // the path and the user's first words on one line in the transcript. The
+  // newline keeps the path on line 1 and the prompt on line 2. (A separate
+  // out-of-band custom message à la the wezterm-open-file extension is the
+  // better long-term shape, but it needs a new RPC command plus a pi-live
+  // bridge endpoint before it can cover terminal-attached sessions too.)
   const withFileMention = useCallback((message: string, images?: AttachedImage[]) => (
     pendingFileMention && (message.trim().length > 0 || !!images?.length)
-      ? `${pendingFileMention}${message}`
+      ? `${pendingFileMention}\n${message}`
       : message
   ), [pendingFileMention]);
   const sendWithMention = useCallback((message: string, images?: AttachedImage[]) => (

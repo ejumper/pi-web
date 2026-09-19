@@ -21,7 +21,14 @@ interface FileNode {
 }
 
 interface Props {
+  /** Session cwd. Used as the base for @mention relative paths, and as the
+   *  browse root when `root` is not supplied. */
   cwd: string;
+  /** Directory the explorer actually shows. Defaults to `cwd`. Kept separate so
+   *  the "up one directory" button can widen the view without changing the
+   *  session's cwd — listing/creating/uploading follow `root`, while @mentions
+   *  stay relative to the session `cwd` (absolute outside it). */
+  root?: string;
   onOpenFile: (filePath: string, fileName: string) => void;
   refreshKey?: number;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
@@ -508,6 +515,7 @@ function TreeNode({
 
 export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileExplorer({
   cwd,
+  root,
   onOpenFile,
   refreshKey,
   onAtMention,
@@ -515,6 +523,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onUploadBusyChange,
   onFileMoved,
 }, ref) {
+  // The directory being shown. Everything that *acts on* the filesystem (list,
+  // create, upload, drop target) uses this; only @mention relative paths use
+  // the session `cwd`.
+  const browseRoot = root ?? cwd;
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -570,10 +582,10 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setUploadSummary({ uploaded, skipped, errors });
 
     if (uploaded.length > 0) {
-      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(cwd, name))));
+      setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(browseRoot, name))));
       setTreeRefreshKey((key) => key + 1);
     }
-  }, [cwd]);
+  }, [browseRoot]);
 
   const performUpload = useCallback(async (
     files: File[],
@@ -585,7 +597,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setUploadPhase("uploading");
 
     try {
-      const { status, data } = await uploadFiles(cwd, files, strategy, setUploadProgress);
+      const { status, data } = await uploadFiles(browseRoot, files, strategy, setUploadProgress);
       if (status === 409 && data.conflicts?.length) {
         setPendingConflict({
           files,
@@ -604,7 +616,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     } finally {
       setUploadPhase("idle");
     }
-  }, [applyUploadResult, cwd]);
+  }, [applyUploadResult, browseRoot]);
 
   const prepareUpload = useCallback(async (files: File[]) => {
     if (files.length === 0 || uploadBusy) return;
@@ -617,7 +629,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
     try {
       const res = await fetch(
-        `/api/files/${encodeFilePathForApi(cwd)}?type=upload-check`,
+        `/api/files/${encodeFilePathForApi(browseRoot)}?type=upload-check`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -642,7 +654,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     } finally {
       setUploadPhase("idle");
     }
-  }, [cwd, performUpload, uploadBusy]);
+  }, [browseRoot, performUpload, uploadBusy]);
 
   const handleUploadInput = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -672,7 +684,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     setCreatingBusy(true);
     setCreateError(null);
     try {
-      const res = await fetch(`/api/files/${encodeFilePathForApi(cwd)}?type=create`, {
+      const res = await fetch(`/api/files/${encodeFilePathForApi(browseRoot)}?type=create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, kind: creating.kind }),
@@ -680,14 +692,14 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       const data = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `Create failed (HTTP ${res.status})`);
       setCreating(null);
-      setHighlightedPaths(new Set([joinFilePath(cwd, name)]));
+      setHighlightedPaths(new Set([joinFilePath(browseRoot, name)]));
       setTreeRefreshKey((key) => key + 1);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreatingBusy(false);
     }
-  }, [cancelCreate, creating, cwd]);
+  }, [cancelCreate, creating, browseRoot]);
 
   useImperativeHandle(ref, () => ({
     openUploadPicker() {
@@ -711,11 +723,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   useEffect(() => () => onUploadBusyChange?.(false), [onUploadBusyChange]);
 
   useEffect(() => {
-    const cwdChanged = prevCwdRef.current !== cwd;
-    prevCwdRef.current = cwd;
+    const rootChanged = prevCwdRef.current !== browseRoot;
+    prevCwdRef.current = browseRoot;
 
-    // Reset expanded state only when cwd changes, not on refreshKey bumps
-    if (cwdChanged) {
+    // Reset expanded state only when the shown directory changes, not on refreshKey bumps
+    if (rootChanged) {
       setExpandedPaths(new Set());
       setHighlightedPaths(new Set());
       setUploadSummary(null);
@@ -723,24 +735,24 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       setUploadError(null);
     }
 
-    setLoading(cwdChanged);
+    setLoading(rootChanged);
     setError(null);
     let cancelled = false;
-    fetchEntries(cwd)
+    fetchEntries(browseRoot)
       .then((entries) => { if (!cancelled) setRoots(entries); })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [cwd, refreshKey, treeRefreshKey]);
+  }, [browseRoot, refreshKey, treeRefreshKey]);
 
   const showUploadFeedback = uploadBusy || pendingConflict !== null || uploadError !== null || uploadSummary !== null || moveError !== null;
 
   const addUploadedFilesToChat = useCallback(() => {
     if (!uploadSummary || uploadSummary.uploaded.length === 0) return;
     onAtMentions?.(
-      uploadSummary.uploaded.map((name) => getRelativeFilePath(joinFilePath(cwd, name), cwd)),
+      uploadSummary.uploaded.map((name) => getRelativeFilePath(joinFilePath(browseRoot, name), cwd)),
     );
-  }, [cwd, onAtMentions, uploadSummary]);
+  }, [browseRoot, cwd, onAtMentions, uploadSummary]);
 
   return (
     <div style={{ minHeight: "100%" }}>
@@ -948,23 +960,23 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
         <div
           style={{
             minHeight: 40,
-            background: dropTargetPath === cwd ? "var(--bg-selected)" : "transparent",
-            outline: dropTargetPath === cwd ? "1px solid var(--accent)" : "none",
+            background: dropTargetPath === browseRoot ? "var(--bg-selected)" : "transparent",
+            outline: dropTargetPath === browseRoot ? "1px solid var(--accent)" : "none",
             outlineOffset: -1,
           }}
           onDragOver={(e) => {
-            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === cwd) return;
+            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === browseRoot) return;
             e.preventDefault();
-            setDropTargetPath(cwd);
+            setDropTargetPath(browseRoot);
           }}
           onDragLeave={() => {
-            if (dropTargetPath === cwd) setDropTargetPath(null);
+            if (dropTargetPath === browseRoot) setDropTargetPath(null);
           }}
           onDrop={(e) => {
             e.preventDefault();
             setDropTargetPath(null);
-            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === cwd) return;
-            void handleMoveRequested(draggedNode.fullPath, cwd);
+            if (!draggedNode || getFileDirectory(draggedNode.fullPath) === browseRoot) return;
+            void handleMoveRequested(draggedNode.fullPath, browseRoot);
           }}
         />
       </div>

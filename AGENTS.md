@@ -52,6 +52,7 @@ app/api/
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
   auth/logout/[provider]/route.ts POST OAuth logout
   auth/providers/route.ts         GET OAuth provider list
+  browse/allow/route.ts           POST { path } — allow-list a dir for the explorer
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
   files/[...path]/route.ts        GET file contents for viewer
@@ -155,7 +156,8 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 
 ### File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
-- `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
+- `/api/cwd/validate`, `/api/default-cwd`, `/api/worktrees`, and `/api/browse/allow` call `allowFileRoot()` when they make a new location browsable.
+- `/api/browse/allow` is the explorer's "up one directory" support: it validates the path is an existing directory and whitelists it, without touching any session's cwd. The explorer keeps its shown directory (`root`) separate from the session `cwd` — list/create/upload follow `root`, `@`-mention relative paths follow `cwd`. See `docs/` and Guides `filesystem-cwd.md`.
 
 ### Plugins and skills
 - `/api/plugins` uses pi's `SettingsManager` + `DefaultPackageManager` for global/project package install, remove, update, enable, and disable. Disabling writes empty `extensions/skills/prompts/themes` arrays for that package entry.
