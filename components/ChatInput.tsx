@@ -71,7 +71,7 @@ export interface ChatInputHandle {
   insertText: (text: string) => void;
   insertIfEmpty: (text: string) => void;
   prependText: (text: string) => void;
-  addImages: (files: File[]) => void;
+  addFiles: (files: File[]) => void;
   focus: () => void;
   getTextareaEl: () => HTMLTextAreaElement | null;
 }
@@ -244,6 +244,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [recordingState, setRecordingState] = useState<"idle" | "recording" | "transcribing">("idle");
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [micError, setMicError] = useState<string | null>(null);
+  // Generic (non-image) attachments: staged in memory, uploaded to the server
+  // on send, and referenced in the message text as `@/tmp/pi-clipboard-*.ext`.
+  // Not persisted in drafts (localStorage cannot hold arbitrary file sizes).
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -330,8 +336,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     insertText(text: string) {
       insertTextAtCursor(text);
     },
-    addImages(files: File[]) {
-      processImageFiles(files);
+    addFiles(files: File[]) {
+      processPickedFiles(files);
     },
     focus() {
       textareaRef.current?.focus();
@@ -380,16 +386,59 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
+  const removeAttachment = useCallback((index: number) => {
+    setAttachedFiles((prev) => {
+      const next = [...prev];
+      next.splice(index, 1);
+      return next;
+    });
+  }, []);
+
+  const clearAttachments = useCallback(() => {
+    setAttachedFiles([]);
+  }, []);
+
+  // Route a picked/dropped/pasted file list: images go through the existing
+  // base64 inline path, everything else is staged as a generic attachment
+  // (uploaded to the server on send and referenced by path).
+  const processPickedFiles = useCallback((files: File[]) => {
+    if (isStreaming) return;
+    if (!files.length) return;
+    const images = files.filter((f) => f.type.startsWith("image/"));
+    const others = files.filter((f) => !f.type.startsWith("image/"));
+    if (images.length) processImageFiles(images);
+    if (others.length) {
+      setAttachError(null);
+      setAttachedFiles((prev) => [...prev, ...others]);
+    }
+  }, [isStreaming, processImageFiles]);
+
+  const uploadAttachmentFiles = useCallback(async (files: File[]): Promise<string[]> => {
+    return Promise.all(files.map(async (file) => {
+      const formData = new FormData();
+      formData.append("file", file, file.name);
+      const res = await fetch("/api/attachments", { method: "POST", body: formData });
+      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
+      if (!res.ok || !data.path) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      return data.path;
+    }));
+  }, []);
+
   const clearInput = useCallback(() => {
     setValue("");
     setAtQuery(null);
     if (draftKey) clearDraft(draftKey);
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
     clearImages();
+    clearAttachments();
+    setAttachError(null);
+    setUploadingFiles(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [clearImages, draftKey]);
+  }, [clearImages, clearAttachments, draftKey]);
 
   const handleTranscribe = useCallback(async (blob: Blob) => {
     setRecordingState("transcribing");
@@ -551,19 +600,34 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length) return;
-    if (isStreaming) return;
+    if (!msg && !attachedImages.length && !attachedFiles.length) return;
+    if (isStreaming || uploadingFiles) return;
     onAudioUnlock?.();
-    if (!attachedImages.length && msg.startsWith("/") && onBuiltinCommand) {
+    if (!attachedImages.length && !attachedFiles.length && msg.startsWith("/") && onBuiltinCommand) {
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
         if (!result.error) clearInput();
         return;
       }
     }
-    onSend(msg, attachedImages.length ? attachedImages : undefined);
+    // Generic attachments upload first; each lands at /tmp/pi-clipboard-<uuid>.<ext>
+    // and is referenced at the top of the message so the agent can read it.
+    let prefix = "";
+    if (attachedFiles.length) {
+      setUploadingFiles(true);
+      try {
+        const paths = await uploadAttachmentFiles(attachedFiles);
+        prefix = paths.map((p) => `@${p}\n`).join("");
+      } catch (err) {
+        setAttachError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setUploadingFiles(false);
+      }
+    }
+    onSend(prefix + msg, attachedImages.length ? attachedImages : undefined);
     clearInput();
-  }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, attachedFiles, uploadingFiles, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock, uploadAttachmentFiles]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -603,7 +667,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? (slashQuery ? "1 match" : "1 command")
     : `${filteredSlashCommands.length} ${slashQuery ? "matches" : "commands"}`;
   const hasInputText = Boolean(value.trim());
-  const canQueueStreamingMessage = hasInputText && attachedImages.length === 0;
+  const canQueueStreamingMessage = hasInputText && attachedImages.length === 0 && attachedFiles.length === 0;
 
   // ── @ file autocomplete ──────────────────────────────────────────────────
   // Recomputed from the text before the caret on every change/caret move.
@@ -759,8 +823,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length) return;
-    if (attachedImages.length) return;
+    if (!msg && !attachedImages.length && !attachedFiles.length) return;
+    if (attachedImages.length || attachedFiles.length) return;
     onAudioUnlock?.();
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
@@ -774,7 +838,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
     }
     clearInput();
-  }, [value, attachedImages, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, attachedFiles, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = filteredSlashCommands.length - 1;
@@ -928,11 +992,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageItems = items.filter((item) => item.type.startsWith("image/"));
-    if (!imageItems.length) return;
+    // Non-image clipboard files (e.g. copied in a file manager). When image
+    // items exist they already cover those images, so exclude them here.
+    const otherFiles = Array.from(e.clipboardData?.files ?? [])
+      .filter((f) => !f.type.startsWith("image/") || !imageItems.length);
+    if (!imageItems.length && !otherFiles.length) return;
     e.preventDefault();
-    const files = imageItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null);
-    processImageFiles(files);
-  }, [processImageFiles]);
+    const imageFiles = imageItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null);
+    processPickedFiles([...imageFiles, ...otherFiles]);
+  }, [processPickedFiles]);
 
   useEffect(() => {
     if (slashQuery === null) {
@@ -1053,13 +1121,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
         multiple
         disabled={isStreaming}
         style={{ display: "none" }}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
-          processImageFiles(files);
+          processPickedFiles(files);
           e.target.value = "";
         }}
       />
@@ -1147,6 +1214,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             Retrying ({retryInfo.attempt}/{retryInfo.maxAttempts})…{retryInfo.errorMessage && <span style={{ opacity: 0.7, marginLeft: 4 }}>— {retryInfo.errorMessage}</span>}
           </div>
         )}
+        {/* Attachment upload error */}
+        {attachError && (
+          <div style={{
+            marginBottom: 8, padding: "5px 10px",
+            background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
+            borderRadius: 6, fontSize: 12, color: "#ef4444",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+          }}>
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Attachment upload failed: {attachError}</span>
+            <button
+              onClick={() => setAttachError(null)}
+              title="Dismiss"
+              style={{ flexShrink: 0, background: "none", border: "none", color: "#ef4444", cursor: "pointer", padding: 0, display: "flex" }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )}
         {compactResultText && (
           <div style={{
             marginBottom: 8, padding: "5px 10px",
@@ -1164,7 +1251,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         {attachedImages.length > 0 && (
           <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
             {attachedImages.map((img, i) => (
-              <div key={i} style={{ position: "relative", flexShrink: 0 }}>
+              <div key={i} style={{ position: "relative", flexShrink: 0 }} title="Image attachment">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={img.previewUrl}
@@ -1173,6 +1260,44 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 />
                 <button
                   onClick={() => removeImage(i)}
+                  style={{
+                    position: "absolute", top: -4, right: -4,
+                    width: 16, height: 16, borderRadius: "50%",
+                    background: "var(--bg-panel)", border: "1px solid var(--border)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
+                  }}
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Generic file attachment chips */}
+        {attachedFiles.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            {attachedFiles.map((file, i) => (
+              <div key={`${file.name}-${i}`} style={{ position: "relative", flexShrink: 0 }} title={file.name}>
+                <div style={{
+                  width: 148, height: 56, borderRadius: 6, border: "1px solid var(--border)",
+                  background: "var(--bg-panel)", display: "flex", flexDirection: "column",
+                  alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: "0 10px", overflow: "hidden", color: "var(--text-muted)",
+                }}>
+                  {getFileIcon(file.name, 18)}
+                  <span style={{
+                    maxWidth: "100%", fontSize: 11, color: "var(--text-muted)",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>
+                    {file.name || "file"}
+                  </span>
+                </div>
+                <button
+                  onClick={() => removeAttachment(i)}
+                  title={`Remove ${file.name}`}
                   style={{
                     position: "absolute", top: -4, right: -4,
                     width: 16, height: 16, borderRadius: "50%",
@@ -1496,13 +1621,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isStreaming}
-              title="Attach image"
+              title="Attach file"
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
                 width: 32, height: 32, padding: 0,
                 background: "none", border: "none",
                 borderRadius: 9,
-                color: attachedImages.length ? "var(--accent)" : "var(--text-muted)",
+                color: (attachedImages.length || attachedFiles.length) ? "var(--accent)" : "var(--text-muted)",
                 cursor: isStreaming ? "not-allowed" : "pointer",
                 opacity: isStreaming ? 0.5 : 1,
                 transition: "background 0.12s, color 0.12s",
@@ -1510,17 +1635,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               onMouseEnter={(e) => {
                 if (isStreaming) return;
                 e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text)";
+                e.currentTarget.style.color = (attachedImages.length || attachedFiles.length) ? "var(--accent)" : "var(--text)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "none";
-                e.currentTarget.style.color = attachedImages.length ? "var(--accent)" : "var(--text-muted)";
+                e.currentTarget.style.color = (attachedImages.length || attachedFiles.length) ? "var(--accent)" : "var(--text-muted)";
               }}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
             </button>
             {/* Model selector — visible always, disabled during streaming */}
@@ -2158,7 +2281,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   <button
                     onClick={() => sendQueued("steer")}
                     disabled={!canQueueStreamingMessage}
-                    title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
+                    title={(attachedImages.length || attachedFiles.length) ? "Attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
                     aria-label="Steer"
                     style={{
                       flexShrink: 0,
@@ -2181,7 +2304,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   <button
                     onClick={() => sendQueued("followup")}
                     disabled={!canQueueStreamingMessage}
-                    title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
+                    title={(attachedImages.length || attachedFiles.length) ? "Attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
                     aria-label="Follow-up"
                     style={{
                       flexShrink: 0,
@@ -2255,26 +2378,32 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={!value.trim() && !attachedImages.length}
-                  title="Send"
+                  disabled={(!value.trim() && !attachedImages.length && !attachedFiles.length) || uploadingFiles}
+                  title={uploadingFiles ? "Uploading attachments…" : "Send"}
                   aria-label="Send"
                   style={{
                     flexShrink: 0,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     width: 32, height: 32, padding: 0,
-                    background: (value.trim() || attachedImages.length) ? "var(--accent)" : "var(--bg-panel)",
+                    background: ((value.trim() || attachedImages.length || attachedFiles.length) && !uploadingFiles) ? "var(--accent)" : "var(--bg-panel)",
                     border: "none",
                     borderRadius: 8,
-                    color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
-                    boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                    color: ((value.trim() || attachedImages.length || attachedFiles.length) && !uploadingFiles) ? "#fff" : "var(--text-dim)",
+                    cursor: ((value.trim() || attachedImages.length || attachedFiles.length) && !uploadingFiles) ? "pointer" : "not-allowed",
+                    boxShadow: ((value.trim() || attachedImages.length || attachedFiles.length) && !uploadingFiles) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
                     transition: "background 0.15s, box-shadow 0.15s",
                   }}
                 >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="2" y1="7" x2="11" y2="7" />
-                    <polyline points="7.5 3 12 7 7.5 11" />
-                  </svg>
+                  {uploadingFiles ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }}>
+                      <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="2" y1="7" x2="11" y2="7" />
+                      <polyline points="7.5 3 12 7 7.5 11" />
+                    </svg>
+                  )}
                 </button>
               </>
             )}
