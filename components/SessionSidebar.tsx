@@ -104,17 +104,27 @@ function getRecentProjects(sessions: SessionInfo[]): string[] {
     .map(([root]) => root);
 }
 
-/** Fixed quick-access directories shown above the session-derived recent list. */
-function getPinnedProjects(homeDir: string, jumperpediaHome: string): string[] {
+/**
+ * Fixed quick-access directories shown above the session-derived recent list.
+ *
+ * The configured default workspace is pinned first so it is reachable even when
+ * it has no sessions yet. When it is already in the list (the unconfigured
+ * default resolves to Quicknotes) the existing order is left untouched rather
+ * than promoted, so a deployment without PI_WEB_DEFAULT_WORKSPACE looks
+ * unchanged.
+ */
+function getPinnedProjects(homeDir: string, jumperpediaHome: string, defaultWorkspace: string): string[] {
   if (!homeDir) return [];
   if (!jumperpediaHome) return [homeDir];
-  return [
+  const pinned = [
     jumperpediaHome,
     `${jumperpediaHome}/Quicknotes`,
     `${jumperpediaHome}/Guides`,
     `${jumperpediaHome}/Courses`,
     homeDir,
   ];
+  if (defaultWorkspace && !pinned.includes(defaultWorkspace)) return [defaultWorkspace, ...pinned];
+  return [...new Set(pinned)];
 }
 
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
@@ -410,6 +420,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
   const [homeDir, setHomeDir] = useState<string>("");
   const [jumperpediaHome, setJumperpediaHome] = useState<string>("");
+  const [defaultWorkspace, setDefaultWorkspace] = useState<string>("");
+  const [defaultOnLoad, setDefaultOnLoad] = useState(false);
+  // The default-on-load decision needs to know whether /api/home has answered.
+  // Without this the session list can win the race and pin the recent project
+  // before defaultOnLoad is known, leaving the flag looking like it does nothing.
+  const [homeLoaded, setHomeLoaded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
   const [customPathOpen, setCustomPathOpen] = useState(false);
@@ -546,13 +562,43 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [explorerRefreshKey]);
 
   useEffect(() => {
-    fetch("/api/home").then((r) => r.json()).then((d: { home?: string; jumperpediaHome?: string }) => {
+    fetch("/api/home").then((r) => r.json()).then((d: {
+      home?: string;
+      jumperpediaHome?: string;
+      defaultWorkspace?: string;
+      defaultOnLoad?: boolean;
+    }) => {
       if (d.home) setHomeDir(d.home);
       if (d.jumperpediaHome) setJumperpediaHome(d.jumperpediaHome);
-    }).catch(() => {});
+      if (d.defaultWorkspace) setDefaultWorkspace(d.defaultWorkspace);
+      setDefaultOnLoad(d.defaultOnLoad === true);
+    }).catch(() => {}).finally(() => setHomeLoaded(true));
   }, []);
 
   const restoredRef = useRef(false);
+  // Guards the default-cwd request against firing once per re-render while the
+  // first one is still in flight. Failure is not retried: the next effect run
+  // falls through to the recent-project default instead of looping.
+  const defaultCwdRequestedRef = useRef(false);
+
+  /**
+   * Ask the server for the default workspace and select it. Goes through POST
+   * /api/default-cwd rather than joining the path client-side so the directory
+   * is created and added to the file-access allowlist before the file explorer
+   * asks for it.
+   */
+  const applyDefaultWorkspaceCwd = useCallback(() => {
+    if (defaultCwdRequestedRef.current) return;
+    defaultCwdRequestedRef.current = true;
+    fetch("/api/default-cwd", { method: "POST" })
+      .then((r) => r.json())
+      .then((d: { cwd?: string }) => {
+        // Functional update so a cwd the user picked while the request was in
+        // flight is never clobbered.
+        if (d.cwd) setSelectedCwd((prev) => prev ?? d.cwd!);
+      })
+      .catch(() => {});
+  }, []);
 
   /** Resolve the project root for a cwd from the freshest data available */
   const projectRootFor = useCallback((cwd: string | null): string | null => {
@@ -624,25 +670,44 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // Auto-select cwd and restore session from URL on first load
   useEffect(() => {
+    // Wait for /api/home so defaultOnLoad/defaultWorkspace are known before
+    // committing to a cwd. A failed /api/home still sets homeLoaded, so this
+    // can't wedge the sidebar with nothing selected.
+    if (!homeLoaded) return;
+    if (selectedCwd !== null) return;
+
+    // PI_WEB_DEFAULT_ON_LOAD: land in the configured default workspace instead
+    // of the most recently active project. Checked ahead of the empty-list bail
+    // below because this path needs no session list at all — a default workspace
+    // with no sessions in it yet, or a deployment with no sessions at all,
+    // should still be the landing directory.
+    if (defaultOnLoad && !initialSessionId) {
+      applyDefaultWorkspaceCwd();
+      return;
+    }
+
     if (allSessions.length === 0) return;
 
-    if (selectedCwd === null) {
-      // If restoring a session, set cwd to match that session
-      if (initialSessionId && !restoredRef.current) {
-        restoredRef.current = true;
-        const target = allSessions.find((s) => s.id === initialSessionId);
-        if (target) {
-          setSelectedCwd(target.cwd);
-          onSelectSession(target, true);
-          return;
-        }
-        // Session not found — notify parent so it can show the placeholder
-        onInitialRestoreDone?.();
+    // If restoring a session, set cwd to match that session
+    if (initialSessionId && !restoredRef.current) {
+      restoredRef.current = true;
+      const target = allSessions.find((s) => s.id === initialSessionId);
+      if (target) {
+        setSelectedCwd(target.cwd);
+        onSelectSession(target, true);
+        return;
       }
-      const projects = getRecentProjects(allSessions);
-      if (projects.length > 0) setSelectedCwd(projects[0]);
+      // Session not found — notify parent so it can show the placeholder, then
+      // fall back to the default workspace rather than to some other project.
+      onInitialRestoreDone?.();
+      if (defaultOnLoad) {
+        applyDefaultWorkspaceCwd();
+        return;
+      }
     }
-  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
+    const projects = getRecentProjects(allSessions);
+    if (projects.length > 0) setSelectedCwd(projects[0]);
+  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone, defaultOnLoad, homeLoaded, applyDefaultWorkspaceCwd]);
 
   const commitCustomPath = useCallback(async (candidate?: string) => {
     const path = (candidate ?? customPathValue).trim();
@@ -828,7 +893,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const pinnedProjects = getPinnedProjects(homeDir, jumperpediaHome);
+  const pinnedProjects = getPinnedProjects(homeDir, jumperpediaHome, defaultWorkspace);
   const recentProjects = getRecentProjects(allSessions).filter((p) => !pinnedProjects.includes(p));
   const showProjectFilter = pinnedProjects.length + recentProjects.length > 8;
   const visiblePinnedProjects = projectFilter.trim()
