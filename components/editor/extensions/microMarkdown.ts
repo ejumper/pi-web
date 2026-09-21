@@ -21,9 +21,13 @@ import { tags as t } from "@lezer/highlight";
  * light/dark app toggle works with no JS reconfiguration.
  */
 export const microMarkdownHighlightStyle = HighlightStyle.define([
-  // h1/h2: blue, bold italic underline (micro "headline")
+  // h1: blue bold italic — NO text-decoration. The full-width .md-h1-row
+  // border (see globals.css) IS the underline, mirroring how the patched
+  // micro build extends the heading underline across the whole line.
+  { tag: t.heading1, color: "var(--md-h1)", fontWeight: "bold", fontStyle: "italic" },
+  // h2: blue, bold italic underline (text-width only — no full-row border)
   {
-    tag: [t.heading1, t.heading2],
+    tag: t.heading2,
     color: "var(--md-h1)",
     fontWeight: "bold",
     fontStyle: "italic",
