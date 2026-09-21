@@ -568,14 +568,25 @@ html.dark {
 /* Full-width h1 underline — the patched-micro h1 look, but anchored to the
    text instead of the line element: .cm-line carries 1rem of left padding
    (softWrapIndent), so a plain border-bottom started 16px left of the text
-   and sat at the line-box bottom (too low, too heavy). A 1px gradient line
-   starting at the text's left padding and sitting at the text-underline
-   height fixes all three. Tuned for the FileViewer's 13px / 1.6 mono. */
+   and sat at the line-box bottom (too low, too heavy).
+   Drawn as a positioned pseudo-element rather than a background gradient:
+   .cm-activeLine sets the `background` shorthand, which resets
+   background-image to none and would wipe a gradient the moment the cursor
+   lands on the line. A ::after layer paints above that background, so the
+   underline survives the active-line highlight. Tuned for the FileViewer's
+   13px / 1.6 mono. */
 .md-h1-row {
-  background-image: linear-gradient(var(--md-h1), var(--md-h1));
-  background-repeat: no-repeat;
-  background-size: calc(100% - 1rem) 1px;
-  background-position: 1rem 15px;
+  position: relative;
+}
+.md-h1-row::after {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  right: 0;
+  top: 15px;
+  height: 1px;
+  background: var(--md-h1);
+  pointer-events: none;
 }
 
 @keyframes goto-flash-red {

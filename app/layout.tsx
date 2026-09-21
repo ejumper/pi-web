@@ -23,6 +23,11 @@ export const viewport: Viewport = {
   // Lets the page draw into the safe area (notch/home-indicator/rounded
   // corners) so `env(safe-area-inset-*)` resolves to real values instead of 0.
   viewportFit: "cover",
+  // Android Chrome: shrink the *layout* viewport when the keyboard opens so
+  // flex/100vh containers resize and the composer sits above the keyboard
+  // instead of being covered. iOS ignores this (never implemented) — the
+  // useKeyboardAbovePin hook covers iOS via the visualViewport API.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({
