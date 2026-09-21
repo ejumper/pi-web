@@ -33,8 +33,9 @@ interface UseEdgeSwipeOptions {
 
 /**
  * Mobile swipe-to-open/close for the left sidebar and right file panel.
- * Left edge: drag right opens the sidebar (if closed) or closes the right
- * panel (if open). Right edge: drag left opens the right panel (if closed)
+ * Left edge, drag right: close the right file panel if it's open (priority —
+ * the panel swipe-close mirrors the panel swipe-open), else open the sidebar
+ * if it's closed. Right edge: drag left opens the right panel (if closed)
  * or closes the sidebar (if open) — same rule, mirrored.
  */
 export function useEdgeSwipe(opts: UseEdgeSwipeOptions): void {
@@ -74,8 +75,8 @@ export function useEdgeSwipe(opts: UseEdgeSwipeOptions): void {
       let candidateDir: 1 | -1 = 1;
 
       if (x <= EDGE_ZONE_PX) {
-        if (!sidebarOpen) { candidatePane = "sidebar"; candidateAction = "open"; candidateDir = 1; }
-        else if (rightPanelOpen) { candidatePane = "rightPanel"; candidateAction = "close"; candidateDir = 1; }
+        if (rightPanelOpen) { candidatePane = "rightPanel"; candidateAction = "close"; candidateDir = 1; }
+        else if (!sidebarOpen) { candidatePane = "sidebar"; candidateAction = "open"; candidateDir = 1; }
       } else if (x >= w - EDGE_ZONE_PX) {
         if (!rightPanelOpen) { candidatePane = "rightPanel"; candidateAction = "open"; candidateDir = -1; }
         else if (sidebarOpen) { candidatePane = "sidebar"; candidateAction = "close"; candidateDir = -1; }

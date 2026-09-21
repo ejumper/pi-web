@@ -3,6 +3,7 @@
 import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import { getFileIcon, FolderIcon } from "./FileIcons";
 import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
+import { isAudioPath, isDocumentPreviewPath, isImagePath } from "@/lib/file-types";
 
 interface FileEntry {
   name: string;
@@ -35,6 +36,10 @@ interface Props {
   onAtMentions?: (relativePaths: string[]) => void;
   onUploadBusyChange?: (busy: boolean) => void;
   onFileMoved?: (oldPath: string, newPath: string) => void;
+  /** Called when "go to path" resolves to a directory to show. The parent
+   *  owns the shown root (same as "up one directory") — the session cwd is
+   *  untouched. */
+  onNavigateRoot?: (path: string) => void;
 }
 
 interface DraggedNode {
@@ -54,6 +59,7 @@ function isValidDropTarget(dragged: DraggedNode, targetDir: FileNode): boolean {
 export interface FileExplorerHandle {
   openUploadPicker: () => void;
   startCreate: (kind: "file" | "dir") => void;
+  startGoto: () => void;
 }
 
 type UploadPhase = "idle" | "checking" | "uploading";
@@ -522,6 +528,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   onAtMentions,
   onUploadBusyChange,
   onFileMoved,
+  onNavigateRoot,
 }, ref) {
   // The directory being shown. Everything that *acts on* the filesystem (list,
   // create, upload, drop target) uses this; only @mention relative paths use
@@ -541,12 +548,17 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [creating, setCreating] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
   const [creatingBusy, setCreatingBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [gotoOpen, setGotoOpen] = useState(false);
+  const [gotoValue, setGotoValue] = useState("");
+  const [gotoInvalid, setGotoInvalid] = useState(false);
+  const [gotoFlash, setGotoFlash] = useState(0);
   const [draggedNode, setDraggedNode] = useState<DraggedNode | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const prevCwdRef = useRef<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const createInputRef = useRef<HTMLInputElement>(null);
+  const gotoInputRef = useRef<HTMLInputElement>(null);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
   const uploadBusy = uploadPhase !== "idle";
 
@@ -701,15 +713,94 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     }
   }, [cancelCreate, creating, browseRoot]);
 
+  const cancelGoto = useCallback(() => {
+    setGotoOpen(false);
+    setGotoValue("");
+    setGotoInvalid(false);
+  }, []);
+
+  const flashGotoInvalid = useCallback(() => {
+    setGotoInvalid(true);
+    setGotoFlash((n) => n + 1);
+  }, []);
+
+  const submitGoto = useCallback(async () => {
+    const raw = gotoValue.trim();
+    if (!raw) {
+      cancelGoto();
+      return;
+    }
+    // Resolve like a shell: ~ and absolute paths pass through; anything else
+    // is relative to the directory currently shown (not the server's cwd).
+    const looksAbsolute = raw.startsWith("/") || raw.startsWith("~") || /^[a-zA-Z]:[\\/]/.test(raw);
+    const candidate = looksAbsolute ? raw : joinFilePath(browseRoot, raw);
+    try {
+      const res = await fetch("/api/browse/allow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: candidate }),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        path?: string;
+        isDir?: boolean;
+        filePath?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.success || !data.path) {
+        flashGotoInvalid();
+        return;
+      }
+      if (data.isDir) {
+        onNavigateRoot?.(data.path);
+        cancelGoto();
+        return;
+      }
+      const filePath = data.filePath ?? "";
+      // Only files CodeMirror can edit open; images/audio/pdf/docx flash instead.
+      if (!filePath || isImagePath(filePath) || isAudioPath(filePath) || isDocumentPreviewPath(filePath)) {
+        flashGotoInvalid();
+        return;
+      }
+      onOpenFile(filePath, getFileName(filePath));
+      cancelGoto();
+    } catch {
+      flashGotoInvalid();
+    }
+  }, [browseRoot, cancelGoto, flashGotoInvalid, gotoValue, onNavigateRoot, onOpenFile]);
+
   useImperativeHandle(ref, () => ({
     openUploadPicker() {
       if (!uploadBusy) uploadInputRef.current?.click();
     },
     startCreate(kind) {
+      setGotoOpen(false);
       setCreating({ kind, name: "" });
       setCreateError(null);
     },
+    startGoto() {
+      setCreating(null);
+      setCreateError(null);
+      setGotoValue("");
+      setGotoInvalid(false);
+      setGotoOpen(true);
+    },
   }), [uploadBusy]);
+
+  // Focus the path input as soon as the goto row appears.
+  useEffect(() => {
+    if (gotoOpen) gotoInputRef.current?.focus();
+  }, [gotoOpen]);
+
+  // Restart the flash animation on every rejection, even while the row stays open.
+  useEffect(() => {
+    if (gotoFlash === 0) return;
+    const el = gotoInputRef.current;
+    if (!el) return;
+    el.classList.remove("goto-flash");
+    void el.offsetWidth; // force reflow so re-adding the class restarts the animation
+    el.classList.add("goto-flash");
+  }, [gotoFlash]);
 
   // Focus the name input as soon as the create row appears.
   useEffect(() => {
@@ -883,6 +974,40 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       )}
 
       <div style={{ padding: "2px 4px" }}>
+        {gotoOpen && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, paddingLeft: 8, paddingRight: 8, height: 26 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              ref={gotoInputRef}
+              type="text"
+              value={gotoValue}
+              placeholder="go to path… (~, /, or relative)"
+              spellCheck={false}
+              onChange={(e) => {
+                setGotoValue(e.target.value);
+                setGotoInvalid(false);
+              }}
+              onBlur={() => cancelGoto()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); void submitGoto(); }
+                else if (e.key === "Escape") { e.preventDefault(); cancelGoto(); }
+              }}
+              style={{
+                flex: 1,
+                fontSize: 12,
+                color: "var(--text)",
+                background: "var(--bg-panel)",
+                border: `1px solid ${gotoInvalid ? "#ef4444" : "var(--accent)"}`,
+                borderRadius: 3,
+                padding: "2px 5px",
+                minWidth: 0,
+              }}
+            />
+          </div>
+        )}
         {creating && (
           <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "1px 0 5px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 4, paddingLeft: 8, paddingRight: 8, height: 24 }}>

@@ -10,6 +10,7 @@ import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
 import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
 import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
 import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
+import { microMarkdown } from "@/components/editor/extensions/microMarkdown";
 import { loadLanguageForFile } from "@/components/editor/language";
 import {
   DOCX_PREVIEW_MAX_BYTES,
@@ -720,6 +721,13 @@ export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirty
 
 type ConflictInfo = { source: "watch" | "save"; diskMtime: string };
 
+// wc-style word count (whitespace-delimited) + character count, for the
+// live status-bar display that replaced the gutter line numbers.
+function countText(text: string): { words: number; chars: number } {
+  const trimmed = text.trim();
+  return { words: trimmed ? trimmed.split(/\s+/).length : 0, chars: text.length };
+}
+
 function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyChange, onEditorViewChange }: Props) {
   const { isDark } = useTheme();
   const isMobile = useIsMobile();
@@ -730,6 +738,8 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const [previewMode, setPreviewMode] = useState(false);
   const [viewMode, setViewMode] = useState<"source" | "diff">("source");
   const [wrapLines, setWrapLines] = useState(true);
+  const [counts, setCounts] = useState<{ words: number; chars: number }>({ words: 0, chars: 0 });
+  const [spellcheckOn, setSpellcheckOn] = useState(false);
   const [watching, setWatching] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
   const [dirty, setDirty] = useState(false);
@@ -885,6 +895,8 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     setPreviewMode(false);
     setViewMode("source");
     setWrapLines(true);
+    setSpellcheckOn(false);
+    setCounts({ words: 0, chars: 0 });
     setChangeCount(0);
     setWatching(false);
     setDirty(false);
@@ -933,10 +945,32 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     viewRef.current?.dispatch({ effects: compartmentsRef.current.wrap.reconfigure(wrapExtension(wrapLines)) });
   }, [wrapLines]);
 
-  // Reconfigure syntax-highlight colors when the app theme changes.
+  // Reconfigure syntax highlighting when the app theme changes — markdown
+  // files layer the micro-matching style over the base theme.
+  const isMarkdownFile = data?.language === "markdown";
   useEffect(() => {
-    viewRef.current?.dispatch({ effects: compartmentsRef.current.highlight.reconfigure(getSyntaxHighlightExtension(isDark)) });
-  }, [isDark]);
+    viewRef.current?.dispatch({
+      effects: compartmentsRef.current.highlight.reconfigure(
+        isMarkdownFile
+          ? [microMarkdown(), getSyntaxHighlightExtension(isDark)]
+          : getSyntaxHighlightExtension(isDark),
+      ),
+    });
+  }, [isDark, isMarkdownFile]);
+
+  // Browser-native spellcheck — CM6 hard-disables it on the content DOM
+  // (spellcheck="false"), so toggling means flipping the attribute back.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
+  }, [spellcheckOn]);
+
+  // Keep counts in sync with loads/watch reloads; live edits update them via
+  // CodeMirrorHost's onDocChange below.
+  useEffect(() => {
+    setCounts(data ? countText(data.content) : { words: 0, chars: 0 });
+  }, [data]);
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -1025,7 +1059,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const isHtml = data.language === "html";
   const isMarkdown = data.language === "markdown";
   const markdownDirectory = getFileDirectory(filePath);
-  const lines = data.content.split("\n");
   const hasDiff = prevContent !== null && prevContent !== data.content;
 
   return (
@@ -1057,7 +1090,11 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             regardless of which of the info items below are currently hidden. */}
         <span style={{ marginLeft: "auto", flexShrink: 0 }} />
         {statusBarHideCount < 1 && <span style={{ flexShrink: 0 }}>{data.language}</span>}
-        {!isMobile && statusBarHideCount < 2 && viewMode === "source" && <span style={{ flexShrink: 0 }}>{lines.length} lines</span>}
+        {!isMobile && statusBarHideCount < 2 && viewMode === "source" && (
+          <span style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+            {counts.words.toLocaleString()} words · {counts.chars.toLocaleString()} chars
+          </span>
+        )}
         {!isMobile && statusBarHideCount < 3 && <span style={{ flexShrink: 0 }}>{formatSize(data.size)}</span>}
 
         {/* Live watch indicator — mobile always shows just the dot, no label */}
@@ -1076,7 +1113,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
                 boxShadow: watching ? "0 0 4px #4ade80" : "none",
               }}
             />
-            {!isMobile && (watching ? "live" : "static")}
           </span>
         )}
 
@@ -1088,13 +1124,15 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           />
         )}
 
-        {/* Save button */}
+        {/* Save button — floppy icon (spinner while saving) */}
         <button
           onClick={() => handleSave()}
           disabled={!dirty || saveState === "saving"}
           title="Save (Ctrl/Cmd+S)"
+          aria-label="Save"
           style={{
-            padding: "2px 8px", fontSize: 11, cursor: !dirty || saveState === "saving" ? "default" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            height: 20, width: 22, padding: 0,
             background: "var(--bg-hover)",
             color: dirty ? "var(--text)" : "var(--text-dim)",
             border: "1px solid var(--border)", borderRadius: 5,
@@ -1102,7 +1140,17 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             opacity: !dirty || saveState === "saving" ? 0.6 : 1,
           }}
         >
-          {saveState === "saving" ? "Saving…" : "Save"}
+          {saveState === "saving" ? (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-5.7-8.4" />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
+            </svg>
+          )}
         </button>
         {saveState === "error" && saveError && (
           <span style={{ color: "#f87171", maxWidth: 160, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
@@ -1182,21 +1230,52 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           </div>
         )}
 
-        {/* Word wrap toggle */}
+        {/* Word wrap toggle — left-justified lines icon */}
         {viewMode === "source" && !previewMode && (
           <button
             onClick={() => setWrapLines((v) => !v)}
             title={wrapLines ? "Disable word wrap" : "Enable word wrap"}
+            aria-label="Toggle word wrap"
+            aria-pressed={wrapLines}
             style={{
-              padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              height: 20, width: 22, padding: 0,
               background: wrapLines ? "var(--bg-selected)" : "var(--bg-hover)",
               color: wrapLines ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
               flexShrink: 0,
-              fontWeight: wrapLines ? 600 : 400,
             }}
           >
-            wrap
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <line x1="3" y1="5" x2="21" y2="5" />
+              <line x1="3" y1="10" x2="17" y2="10" />
+              <line x1="3" y1="15" x2="21" y2="15" />
+              <line x1="3" y1="20" x2="13" y2="20" />
+            </svg>
+          </button>
+        )}
+
+        {/* Spellcheck toggle — browser-native spellcheck, off by default */}
+        {viewMode === "source" && !previewMode && (
+          <button
+            onClick={() => setSpellcheckOn((v) => !v)}
+            title={spellcheckOn ? "Spellcheck: on — click to turn off" : "Spellcheck: off — click to turn on"}
+            aria-label="Toggle spellcheck"
+            aria-pressed={spellcheckOn}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              height: 20, width: 22, padding: 0,
+              background: spellcheckOn ? "var(--bg-selected)" : "var(--bg-hover)",
+              color: spellcheckOn ? "var(--text)" : "var(--text-muted)",
+              border: "1px solid var(--border)", borderRadius: 5,
+              flexShrink: 0,
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m6 16 6-12 6 12" />
+              <path d="M8 12h8" />
+              <path d="m16 20 2 2 4-4" />
+            </svg>
           </button>
         )}
 
@@ -1228,21 +1307,25 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           </div>
         )}
 
-        {/* Markdown edit/preview toggle — single button, exactly like wrap */}
+        {/* Markdown edit/preview toggle — wrench icon */}
         {isMarkdown && viewMode === "source" && (
           <button
             onClick={() => setPreviewMode((v) => !v)}
             title={previewMode ? "Switch to raw/edit view" : "Switch to preview"}
+            aria-label="Toggle markdown preview"
+            aria-pressed={!previewMode}
             style={{
-              padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              height: 20, width: 22, padding: 0,
               background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
               color: !previewMode ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
               flexShrink: 0,
-              fontWeight: !previewMode ? 600 : 400,
             }}
           >
-            Edit
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+            </svg>
           </button>
         )}
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
@@ -1339,6 +1422,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             extensions={editorExtensions}
             onReady={(view) => {
               viewRef.current = view;
+              view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
               onEditorViewChange?.(view);
               const pending = loadLanguageForFile(filePath);
               pending?.then((ext) => {
@@ -1353,6 +1437,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             }}
             onDocChange={(docString) => {
               latestDocRef.current = docString;
+              setCounts(countText(docString));
               if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
                 dirtyRef.current = true;
                 setDirty(true);

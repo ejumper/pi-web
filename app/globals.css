@@ -531,6 +531,51 @@ span.linenumber {
   50% { opacity: 0.5; }
 }
 
+/* Explorer "go to path" rejection: red flash + slight shake. Re-triggered by
+   removing/re-adding the class (with a reflow in between) on each failure. */
+.goto-flash {
+  animation: goto-flash-red 0.45s ease;
+}
+
+/* Markdown highlighting in the CodeMirror viewer — mirrors the user's micro
+   editor (markdown.yaml + modus-vivendi). Dark values are the Modus Vivendi
+   palette hexes micro renders; light values are readable equivalents.
+   See components/editor/extensions/microMarkdown.ts. */
+:root {
+  --md-h1: #1d4ed8;          /* h1/h2 — blue */
+  --md-h3: #2563eb;          /* h3-h6 — bright blue */
+  --md-strong: #111111;
+  --md-emphasis: #111111;
+  --md-code: #15803d;        /* inline + fenced code — green */
+  --md-quote: #a3357a;       /* blockquote — magenta */
+  --md-link: #6d28d9;        /* links/urls — purple */
+  --md-mark: #9ca3af;        /* #, *, >, ` and other markup punctuation — gray */
+  --md-hr: #a3357a;          /* horizontal rules */
+}
+
+html.dark {
+  --md-h1: #2fafff;          /* modus-vivendi blue */
+  --md-h3: #79a8ff;          /* modus-vivendi blue-warmer (ANSI brightblue equiv) */
+  --md-strong: #ffffff;
+  --md-emphasis: #ffffff;
+  --md-code: #44bc44;        /* modus-vivendi green */
+  --md-quote: #feacd0;
+  --md-link: #b6a0ff;
+  --md-mark: #a8a8a8;
+  --md-hr: #f78fe7;
+}
+
+/* Full-width underline on `# ` heading lines — the patched-micro h1 look. */
+.md-h1-row {
+  border-bottom: 1px solid var(--md-h1);
+}
+
+@keyframes goto-flash-red {
+  0%, 100% { border-color: var(--accent); background: var(--bg-panel); transform: translateX(0); }
+  15%, 45%, 75% { border-color: #ef4444; background: color-mix(in srgb, #ef4444 12%, var(--bg-panel)); transform: translateX(-3px); }
+  30%, 60%, 90% { border-color: #ef4444; background: color-mix(in srgb, #ef4444 12%, var(--bg-panel)); transform: translateX(3px); }
+}
+
 @keyframes notice-shelf-in {
   from {
     opacity: 0;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { statSync, type Stats } from "fs";
 import { homedir } from "os";
-import { isAbsolute, resolve } from "path";
+import { dirname, isAbsolute, resolve } from "path";
 import { allowFileRoot } from "@/lib/file-access";
 
 function normalizePath(p: string): string {
@@ -22,6 +22,11 @@ function normalizePath(p: string): string {
 // list was never a security boundary on the agent (its Bash tool runs as the
 // normal user regardless), only a guard on what the browser panel can wander
 // into. The same widening is already reachable via /api/cwd/validate.
+//
+// Also accepts a path to an existing *file* (used by the explorer's "go to
+// path" box): the file's parent directory is allowed so /api/files can read
+// the file itself, and the response reports `isDir: false` plus the resolved
+// `filePath` so the client can open it instead of navigating.
 export async function POST(req: Request) {
   try {
     const body = await req.json() as { path?: unknown };
@@ -36,15 +41,21 @@ export async function POST(req: Request) {
     try {
       stat = statSync(normalizedPath);
     } catch {
-      return NextResponse.json({ error: `Directory does not exist: ${raw}` }, { status: 400 });
+      return NextResponse.json({ error: `Path does not exist: ${raw}` }, { status: 400 });
     }
 
-    if (!stat.isDirectory()) {
-      return NextResponse.json({ error: `Path is not a directory: ${raw}` }, { status: 400 });
+    if (stat.isDirectory()) {
+      allowFileRoot(normalizedPath);
+      return NextResponse.json({ success: true, path: normalizedPath, isDir: true });
     }
 
-    allowFileRoot(normalizedPath);
-    return NextResponse.json({ success: true, path: normalizedPath });
+    if (stat.isFile()) {
+      const parent = dirname(normalizedPath);
+      allowFileRoot(parent);
+      return NextResponse.json({ success: true, path: parent, isDir: false, filePath: normalizedPath });
+    }
+
+    return NextResponse.json({ error: `Path is not a file or directory: ${raw}` }, { status: 400 });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

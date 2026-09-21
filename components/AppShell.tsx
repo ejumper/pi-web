@@ -14,10 +14,10 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
-import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
 import { getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import type { NotepadKind } from "@/lib/notepad";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -28,7 +28,6 @@ type SessionCopyField = "file" | "id";
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isDark, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
@@ -71,9 +70,6 @@ export function AppShell() {
     branchLeafChangeFnRef.current?.(leafId);
   }, []);
 
-  const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
-  const systemBtnRef = useRef<HTMLButtonElement>(null);
-
   // Voicemail-notify toggle — server-authoritative per session (see
   // lib/notify-state.ts), so it's re-synced whenever the active session
   // changes rather than being local UI state.
@@ -113,10 +109,6 @@ export function AppShell() {
     }).catch(() => {});
   }, [selectedSession?.id, notifyEnabled]);
 
-  const handleSystemPromptChange = useCallback((prompt: string | null) => {
-    setSystemPrompt(prompt);
-  }, []);
-
   // Session stats (tokens + cost) — populated by ChatWindow, displayed in top bar
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
@@ -145,10 +137,10 @@ export function AppShell() {
   }, []);
 
   // Single active panel — only one dropdown open at a time
-  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "system" | "session" | null>(null);
+  const [activeTopPanel, setActiveTopPanel] = useState<"branches" | "session" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  const toggleTopPanel = useCallback((panel: "branches" | "system" | "session") => {
+  const toggleTopPanel = useCallback((panel: "branches" | "session") => {
     if (isMobile) setSidebarOpen(false);
     setActiveTopPanel((cur) => cur === panel ? null : panel);
   }, [isMobile]);
@@ -298,7 +290,6 @@ export function AppShell() {
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);
-    setSystemPrompt(null);
     setActiveTopPanel(null);
     router.replace("/", { scroll: false });
   }, [router, selectedSession]);
@@ -314,7 +305,6 @@ export function AppShell() {
     setNotifyPendingForNewSession(false);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
-    setSystemPrompt(null);
     setInitialSessionRestored(true);
     // On mobile, collapse the overlay drawer so the chat is revealed after pick.
     if (isMobile && !isRestore) setSidebarOpen(false);
@@ -337,7 +327,6 @@ export function AppShell() {
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);
-    setSystemPrompt(null);
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
@@ -414,7 +403,6 @@ export function AppShell() {
       setSessionKey((k) => k + 1);
       setBranchTree([]);
       setBranchActiveLeafId(null);
-      setSystemPrompt(null);
       setActiveTopPanel(null);
       router.replace("/", { scroll: false });
     }
@@ -437,6 +425,57 @@ export function AppShell() {
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
+
+  // Notepad dropdown — opens the tmp/quick notepads in the editor without
+  // touching the session cwd or the explorer's shown directory (the whole
+  // point). The endpoint creates the file on demand and allow-lists it.
+  const [notepadMenuOpen, setNotepadMenuOpen] = useState(false);
+  const notepadWrapRef = useRef<HTMLDivElement>(null);
+
+  const openNotepad = useCallback(async (kind: NotepadKind) => {
+    try {
+      const res = await fetch("/api/notepad/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind }),
+      });
+      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
+      if (!res.ok || !data.path) {
+        console.error("Notepad open failed:", data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      handleOpenFile(data.path, kind === "tmpnote" ? "Tmpnote" : "Quicknote");
+    } catch (err) {
+      console.error("Notepad open failed:", err);
+    }
+  }, [handleOpenFile]);
+
+  // Close the notepad menu on outside click or Escape
+  useEffect(() => {
+    if (!notepadMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (notepadWrapRef.current && !notepadWrapRef.current.contains(event.target as Node)) {
+        setNotepadMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setNotepadMenuOpen(false); };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [notepadMenuOpen]);
+
+  const topBarNewSessionCwd = selectedSession?.cwd ?? activeCwd ?? newSessionCwd ?? null;
+
+  const handleTopBarNewSession = useCallback(() => {
+    if (!topBarNewSessionCwd) return;
+    const tempId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `tb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    handleNewSession(tempId, topBarNewSessionCwd);
+  }, [handleNewSession, topBarNewSessionCwd]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
     const tab = fileTabs.find((t) => t.id === tabId);
@@ -773,37 +812,6 @@ export function AppShell() {
               </svg>
             )}
           </button>
-          <button
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-            }}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={isDark}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 36, height: 36, padding: 0,
-              background: "none", border: "none", borderRight: "1px solid var(--border)",
-              color: "var(--text-muted)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {isDark ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
-          </button>
           {showChat && (
             <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
               <button
@@ -870,33 +878,85 @@ export function AppShell() {
                 onToggle={() => toggleTopPanel("branches")}
                 hasSession
               />
+              <div ref={notepadWrapRef} style={{ position: "relative", height: "100%", display: "flex" }}>
+                <button
+                  onClick={() => setNotepadMenuOpen((v) => !v)}
+                  title="Notepad"
+                  aria-label="Notepad"
+                  aria-haspopup="menu"
+                  aria-expanded={notepadMenuOpen}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    height: "100%", width: 36, padding: 0,
+                    background: notepadMenuOpen ? "var(--bg-selected)" : "none",
+                    border: "none",
+                    borderTop: notepadMenuOpen ? "2px solid var(--accent)" : "2px solid transparent",
+                    borderRight: "1px solid var(--border)",
+                    color: notepadMenuOpen ? "var(--text)" : "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+                  onMouseLeave={(e) => { if (!notepadMenuOpen) e.currentTarget.style.color = "var(--text-muted)"; }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="8" y1="13" x2="16" y2="13" />
+                    <line x1="8" y1="17" x2="14" y2="17" />
+                  </svg>
+                </button>
+                {notepadMenuOpen && (
+                  <div
+                    role="menu"
+                    style={{
+                      position: "absolute", top: "100%", left: 0, zIndex: 600,
+                      minWidth: 130, padding: "4px 0",
+                      background: "var(--bg-panel)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "0 0 6px 6px",
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                    }}
+                  >
+                    {(["tmpnote", "quicknote"] as const).map((kind) => (
+                      <button
+                        key={kind}
+                        role="menuitem"
+                        type="button"
+                        onClick={() => { setNotepadMenuOpen(false); void openNotepad(kind); }}
+                        style={{
+                          display: "block", width: "100%", textAlign: "left",
+                          padding: "7px 12px", background: "none", border: "none",
+                          color: "var(--text)", fontSize: 12, cursor: "pointer",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                      >
+                        {kind === "tmpnote" ? "Tmpnote" : "Quicknote"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
-                ref={systemBtnRef}
-                onClick={() => toggleTopPanel("system")}
-                title="System prompt"
-                aria-label="System prompt"
-                aria-pressed={activeTopPanel === "system"}
+                onClick={handleTopBarNewSession}
+                disabled={!topBarNewSessionCwd}
+                title={topBarNewSessionCwd ? `New session in ${topBarNewSessionCwd}` : "Select a project first"}
+                aria-label="New session"
                 style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  height: "100%", padding: "0 12px",
-                  background: activeTopPanel === "system" ? "var(--bg-selected)" : "none",
-                  border: "none",
-                  borderTop: activeTopPanel === "system" ? "2px solid var(--accent)" : "2px solid transparent",
-                  borderRight: "1px solid var(--border)",
-                  cursor: "pointer",
-                  color: activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)",
-                  fontSize: 11, whiteSpace: "nowrap", transition: "color 0.1s, background 0.1s",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  height: "100%", width: 36, padding: 0,
+                  background: "none", border: "none", borderRight: "1px solid var(--border)",
+                  color: topBarNewSessionCwd ? "var(--text-muted)" : "var(--text-dim)",
+                  cursor: topBarNewSessionCwd ? "pointer" : "not-allowed",
+                  opacity: topBarNewSessionCwd ? 1 : 0.45,
+                  flexShrink: 0, transition: "color 0.12s",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = activeTopPanel === "system" ? "var(--text)" : "var(--text-muted)"; }}
+                onMouseEnter={(e) => { if (topBarNewSessionCwd) e.currentTarget.style.color = "var(--text)"; }}
+                onMouseLeave={(e) => { if (topBarNewSessionCwd) e.currentTarget.style.color = "var(--text-muted)"; }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: systemPrompt ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }}>
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="8" y1="13" x2="16" y2="13" />
-                  <line x1="8" y1="17" x2="13" y2="17" />
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
-                {!isMobile && <span>System</span>}
               </button>
               {(() => {
                 const notifyActive = selectedSession ? notifyEnabled : notifyPendingForNewSession;
@@ -1042,35 +1102,6 @@ export function AppShell() {
               overflowY: "auto",
               zIndex: 500,
             }}>
-              {activeTopPanel === "system" && (
-                <div style={{
-                  background: "var(--bg-panel)",
-                  borderBottom: "1px solid var(--border)",
-                }}>
-                  {systemPrompt ? (
-                    <div style={{
-                      maxHeight: "min(600px, 75vh)",
-                      overflowY: "auto",
-                      padding: "12px 16px",
-                      color: "var(--text-muted)",
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily: "var(--font-mono)",
-                    }}>
-                      {systemPrompt}
-                    </div>
-                  ) : systemPrompt === "" ? (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      System prompt is empty (tools are disabled)
-                    </div>
-                  ) : (
-                    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Send a message to load the system prompt
-                    </div>
-                  )}
-                </div>
-              )}
               {activeTopPanel === "session" && (
                 <div className="session-info-popover" style={{
                   background: "var(--bg-panel)",
@@ -1243,7 +1274,6 @@ export function AppShell() {
               modelsRefreshKey={modelsRefreshKey}
               chatInputRef={chatInputRef}
               onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
               onSessionStatsChange={handleSessionStatsChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}

@@ -5,7 +5,6 @@ import {
   dropCursor,
   highlightActiveLine,
   keymap,
-  lineNumbers,
 } from "@codemirror/view";
 import {
   defaultKeymap,
@@ -47,7 +46,7 @@ export interface BuildTextEditorExtensionsOptions {
 /** A trimmed-down editor extension set — no folding, no fixed language mode, no search panel/autocomplete. */
 export function buildTextEditorExtensions(opts: BuildTextEditorExtensionsOptions): Extension[] {
   return [
-    lineNumbers(),
+    history(),
     history(),
     drawSelection(),
     dropCursor(),
