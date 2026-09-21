@@ -1014,8 +1014,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 color: selectedCwd ? "var(--text-muted)" : "var(--text-dim)",
                 cursor: selectedCwd ? "pointer" : "not-allowed",
                 height: 32,
-                paddingLeft: 10,
-                paddingRight: 12,
+                width: 32,
+                padding: 0,
                 borderRadius: 7,
                 fontSize: 12,
                 fontWeight: 500,
@@ -1040,7 +1040,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 <line x1="6" y1="1" x2="6" y2="11" />
                 <line x1="1" y1="6" x2="11" y2="6" />
               </svg>
-              New
             </button>
             <button
               onClick={() => loadSessions(false)}

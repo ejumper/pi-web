@@ -14,7 +14,10 @@ const COMMIT_SLOP_PX = 10;
 // as a swipe rather than a scroll.
 const DIRECTION_RATIO = 1.5;
 // Fraction of screen width that counts as "far enough" to commit on release.
-const DISTANCE_THRESHOLD = 0.35;
+// 0.35 made short/slow swipes "poke out then recede" — the drag preview
+// follows the finger but the release snapped back. Lowered so a modest
+// swipe commits; still high enough that a stray nudge doesn't.
+const DISTANCE_THRESHOLD = 0.22;
 // A fast flick commits regardless of distance traveled (px/ms).
 const VELOCITY_THRESHOLD = 0.5;
 

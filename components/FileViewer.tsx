@@ -8,6 +8,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
 import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
+import { useTwoFingerTap } from "@/hooks/useTwoFingerTap";
 import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
 import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
 import { microMarkdown } from "@/components/editor/extensions/microMarkdown";
@@ -1003,6 +1004,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     [],
   );
 
+  // Two-finger tap on the editor = save (a phone has no ctrl+S). Gated to
+  // when there's actually something to save; the wrapper below only renders
+  // in the editor branch, so it's already off in preview/diff modes.
+  const twoFingerSaveRef = useTwoFingerTap({
+    onTap: () => handleSave(),
+    enabled: dirty,
+  });
+
   // Responsive status bar: progressively hide the least-important info
   // (file type, then line count, then size, then the live indicator) only as
   // far as needed to keep the actionable toggle/save buttons from being
@@ -1416,39 +1425,41 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             </ReactMarkdown>
           </div>
         ) : (
-          <CodeMirrorHost
-            key={filePath}
-            doc={latestDocRef.current || data.content}
-            extensions={editorExtensions}
-            onReady={(view) => {
-              viewRef.current = view;
-              view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
-              onEditorViewChange?.(view);
-              const pending = loadLanguageForFile(filePath);
-              pending?.then((ext) => {
-                if (viewRef.current === view) {
-                  view.dispatch({ effects: compartmentsRef.current.language.reconfigure(ext) });
+          <div ref={twoFingerSaveRef} style={{ height: "100%" }}>
+            <CodeMirrorHost
+              key={filePath}
+              doc={latestDocRef.current || data.content}
+              extensions={editorExtensions}
+              onReady={(view) => {
+                viewRef.current = view;
+                view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
+                onEditorViewChange?.(view);
+                const pending = loadLanguageForFile(filePath);
+                pending?.then((ext) => {
+                  if (viewRef.current === view) {
+                    view.dispatch({ effects: compartmentsRef.current.language.reconfigure(ext) });
+                  }
+                }).catch(() => { /* no highlighting for this file type, non-fatal */ });
+              }}
+              onDestroy={() => {
+                viewRef.current = null;
+                onEditorViewChange?.(null);
+              }}
+              onDocChange={(docString) => {
+                latestDocRef.current = docString;
+                setCounts(countText(docString));
+                if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
+                  dirtyRef.current = true;
+                  setDirty(true);
                 }
-              }).catch(() => { /* no highlighting for this file type, non-fatal */ });
-            }}
-            onDestroy={() => {
-              viewRef.current = null;
-              onEditorViewChange?.(null);
-            }}
-            onDocChange={(docString) => {
-              latestDocRef.current = docString;
-              setCounts(countText(docString));
-              if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
-                dirtyRef.current = true;
-                setDirty(true);
-              }
-              const view = viewRef.current;
-              if (view) {
-                setCanUndo(undoDepth(view.state) > 0);
-                setCanRedo(redoDepth(view.state) > 0);
-              }
-            }}
-          />
+                const view = viewRef.current;
+                if (view) {
+                  setCanUndo(undoDepth(view.state) > 0);
+                  setCanRedo(redoDepth(view.state) > 0);
+                }
+              }}
+            />
+          </div>
         )}
       </div>
     </div>

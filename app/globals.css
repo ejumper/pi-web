@@ -565,9 +565,17 @@ html.dark {
   --md-hr: #f78fe7;
 }
 
-/* Full-width underline on `# ` heading lines — the patched-micro h1 look. */
+/* Full-width h1 underline — the patched-micro h1 look, but anchored to the
+   text instead of the line element: .cm-line carries 1rem of left padding
+   (softWrapIndent), so a plain border-bottom started 16px left of the text
+   and sat at the line-box bottom (too low, too heavy). A 1px gradient line
+   starting at the text's left padding and sitting at the text-underline
+   height fixes all three. Tuned for the FileViewer's 13px / 1.6 mono. */
 .md-h1-row {
-  border-bottom: 1px solid var(--md-h1);
+  background-image: linear-gradient(var(--md-h1), var(--md-h1));
+  background-repeat: no-repeat;
+  background-size: calc(100% - 1rem) 1px;
+  background-position: 1rem 15px;
 }
 
 @keyframes goto-flash-red {
