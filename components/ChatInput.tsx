@@ -160,6 +160,31 @@ function slashMatchRank(command: SlashCommandPaletteItem, query: string): number
   return 4;
 }
 
+// Picker filter in the original shape: image-first (on iOS an image-oriented
+// accept also transcodes HEIC to JPEG before we ever see the file) plus the
+// text docs the generic /tmp route was added for. Anything else can still
+// arrive via drag-drop or paste.
+const FILE_ACCEPT = "image/*,text/*,.md,.markdown,.json,.csv,.log,.yaml,.yml,.xml,.toml,.pdf";
+
+// Some pickers (iOS Files/iCloud) hand back images with an empty type — sniff
+// the extension so they still take the inline path instead of silently
+// degrading to a @/tmp file reference the model would have to go read.
+const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|heic|heif|tiff?)$/i;
+const IMAGE_EXTENSION_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+  webp: "image/webp", avif: "image/avif", bmp: "image/bmp", heic: "image/heic",
+  heif: "image/heif", tif: "image/tiff", tiff: "image/tiff",
+};
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || (!file.type && IMAGE_EXTENSION_RE.test(file.name));
+}
+
+function guessImageMime(name: string): string {
+  const ext = name.includes(".") ? name.split(".").pop()?.toLowerCase() ?? "" : "";
+  return IMAGE_EXTENSION_MIME[ext] ?? "image/jpeg";
+}
+
 function imageToDraftImage(image: AttachedImage): ChatDraftImage {
   return { data: image.data, mimeType: image.mimeType };
 }
@@ -349,7 +374,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const processImageFiles = useCallback(async (files: File[]) => {
     if (isStreaming) return;
-    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+    const imageFiles = files.filter(isImageFile);
     if (!imageFiles.length) return;
     const newImages = await Promise.all(
       imageFiles.map(
@@ -360,7 +385,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               const result = reader.result as string;
               // result is "data:<mime>;base64,<data>"
               const base64 = result.split(",")[1];
-              resolve({ data: base64, mimeType: file.type, previewUrl: URL.createObjectURL(file) });
+              resolve({
+                data: base64,
+                // Sniffed files carry no type — fill one in so the provider
+                // gets a real media type instead of an empty string.
+                mimeType: file.type || guessImageMime(file.name),
+                previewUrl: URL.createObjectURL(file),
+              });
             };
             reader.onerror = reject;
             reader.readAsDataURL(file);
@@ -404,8 +435,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const processPickedFiles = useCallback((files: File[]) => {
     if (isStreaming) return;
     if (!files.length) return;
-    const images = files.filter((f) => f.type.startsWith("image/"));
-    const others = files.filter((f) => !f.type.startsWith("image/"));
+    const images = files.filter(isImageFile);
+    const others = files.filter((f) => !isImageFile(f));
     if (images.length) processImageFiles(images);
     if (others.length) {
       setAttachError(null);
@@ -1121,6 +1152,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       <input
         ref={fileInputRef}
         type="file"
+        accept={FILE_ACCEPT}
         multiple
         disabled={isStreaming}
         style={{ display: "none" }}
