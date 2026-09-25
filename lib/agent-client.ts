@@ -22,7 +22,12 @@ export async function sendAgentCommand<T = unknown>(
     error?: string;
   };
   if (!res.ok || body.error) {
-    throw new Error(body.error ?? `HTTP ${res.status}`);
+    // 413 is what a reverse proxy (nginx default 1m) returns when an inline
+    // image or attachment makes the body too large — say so instead of a bare
+    // status code, since the payload is the fix, not the retry.
+    throw new Error(body.error ?? (res.status === 413
+      ? "HTTP 413 — request too large (an image or attachment exceeded the server's upload limit)"
+      : `HTTP ${res.status}`));
   }
   return body.data as T;
 }

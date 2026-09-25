@@ -1201,18 +1201,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to send message:", e);
-      if (e instanceof EventStreamConnectionError) {
-        const optimisticKey = optimisticUserMessageKeyRef.current;
-        if (optimisticKey) {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            return last?.role === "user" && userMessageKey(last) === optimisticKey
-              ? prev.slice(0, -1)
-              : prev;
-          });
-        }
-        addNotice({ type: "error", message: e.message });
+      // Whatever failed — event stream, the prompt POST rejected by the server
+      // or an upstream proxy (e.g. nginx 413 on a large inline image), network
+      // — the message did not reach the agent. Roll the optimistic bubble back
+      // so a failed send cannot masquerade as a delivered one, and say why:
+      // swallowing this made sends look like the model simply never answered.
+      const optimisticKey = optimisticUserMessageKeyRef.current;
+      if (optimisticKey) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          return last?.role === "user" && userMessageKey(last) === optimisticKey
+            ? prev.slice(0, -1)
+            : prev;
+        });
       }
+      addNotice({ type: "error", message: `Message not sent — ${e instanceof Error ? e.message : String(e)}` });
       optimisticUserMessageKeyRef.current = null;
       agentRunningRef.current = false;
       setAgentRunning(false);
@@ -1486,6 +1489,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to steer:", e);
+      addNotice({ type: "error", message: `Steer message not sent — ${e instanceof Error ? e.message : String(e)}` });
     }
   }, [addNotice]);
 
@@ -1514,8 +1518,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to queue prompt:", e);
+      addNotice({ type: "error", message: `Message not queued — ${e instanceof Error ? e.message : String(e)}` });
     }
-  }, []);
+  }, [addNotice]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
@@ -1537,6 +1542,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to follow up:", e);
+      addNotice({ type: "error", message: `Follow-up not queued — ${e instanceof Error ? e.message : String(e)}` });
     }
   }, [addNotice]);
 
