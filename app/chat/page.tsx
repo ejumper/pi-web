@@ -57,6 +57,11 @@ const DOUBLE_TAP_MS = 320;
 const LONG_PRESS_MS = 1000;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|heic|heif|bmp|avif)$/i;
 
+// Minimal valid silent WAV (44-byte header, no samples) — played once from
+// inside a user gesture to unlock later programmatic playback in browsers
+// with strict autoplay blocking (Brave, Safari).
+const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
 function glowFor(phase: Phase, ampAvailable: boolean): { color: keyof typeof GLOW_COLORS; mode: string } {
   switch (phase) {
     case "recording":
@@ -114,6 +119,7 @@ export default function ChatPage() {
   const runTextRef = useRef("");
 
   const audioGraphRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; data: Uint8Array<ArrayBuffer> } | null>(null);
+  const audioUnlockedRef = useRef(false);
   const playbackRef = useRef<{ gen: number; stopped: boolean; waiter: (() => void) | null }>({
     gen: 0,
     stopped: false,
@@ -142,6 +148,33 @@ export default function ChatPage() {
   const ensureAudioGraph = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
+    // Unlock playback: browsers with autoplay blocking (Brave, Safari) refuse
+    // programmatic play() unless the element has already played from inside a
+    // user gesture. A one-shot silent play here establishes that.
+    if (!audioUnlockedRef.current) {
+      audioUnlockedRef.current = true;
+      try {
+        audio.muted = true;
+        audio.src = SILENT_WAV;
+        audio
+          .play()
+          .then(() => {
+            audio.pause();
+            audio.muted = false;
+            audio.removeAttribute("src");
+          })
+          .catch((e) => {
+            console.warn("[chat-tts] silent unlock play failed:", e);
+            audio.muted = false;
+            audio.removeAttribute("src");
+          });
+      } catch (e) {
+        console.warn("[chat-tts] silent unlock failed:", e);
+        audio.muted = false;
+      }
+    }
+
     if (audioGraphRef.current) {
       void audioGraphRef.current.ctx.resume().catch(() => {});
       return;
@@ -150,6 +183,15 @@ export default function ChatPage() {
       const Ctor: typeof AudioContext =
         window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new Ctor();
+      void ctx.resume().catch(() => {});
+      // Only route the element through Web Audio while the context is actually
+      // running: createMediaElementSource PERMANENTLY redirects the element's
+      // output through the graph, so a suspended context would mean silent
+      // playback forever. No graph = native playback + steady CSS pulse.
+      if (ctx.state !== "running") {
+        console.warn(`[chat-tts] AudioContext not running (${ctx.state}); amplitude sync disabled, native playback`);
+        return;
+      }
       const source = ctx.createMediaElementSource(audio);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
@@ -157,9 +199,10 @@ export default function ChatPage() {
       analyser.connect(ctx.destination);
       audioGraphRef.current = { ctx, analyser, data: new Uint8Array(analyser.fftSize) };
       setAmpAvailable(true);
-      void ctx.resume().catch(() => {});
-    } catch {
+      console.log(`[chat-tts] audio graph active (state=${ctx.state})`);
+    } catch (e) {
       // No Web Audio → the glow falls back to a steady CSS pulse.
+      console.warn("[chat-tts] audio graph unavailable:", e);
     }
   }, []);
 
@@ -182,7 +225,7 @@ export default function ChatPage() {
     if (!p) {
       p = fetch(`/api/chat/tts?session=${encodeURIComponent(sid)}&chunk=${index}`)
         .then((r) => {
-          if (!r.ok) throw new Error("TTS chunk failed");
+          if (!r.ok) throw new Error(`TTS chunk failed (${r.status})`);
           return r.blob();
         })
         .then((b) => URL.createObjectURL(b));
@@ -241,9 +284,26 @@ export default function ChatPage() {
         }
         if (playbackRef.current.stopped || gen !== playbackRef.current.gen) break;
         audio.src = url;
+        // If the graph exists, its context must be running or the element is
+        // silently muted — resume() is a no-op when already running.
+        if (audioGraphRef.current) {
+          try {
+            await audioGraphRef.current.ctx.resume();
+          } catch {
+            /* keep going; play() below reports the real failure */
+          }
+        }
         try {
           await audio.play();
-        } catch {
+          console.log(`[chat-tts] playing chunk ${i}/${chunkCount} (graph=${audioGraphRef.current ? "on" : "off"})`);
+        } catch (e) {
+          const name = e instanceof Error ? e.name : "Error";
+          console.error("[chat-tts] play() failed:", e);
+          setError(
+            name === "NotAllowedError"
+              ? "The browser blocked audio playback — tap the page once, then press-and-hold to replay."
+              : `Audio playback failed (${name}). Press-and-hold to replay.`,
+          );
           break;
         }
         if (!started) {
@@ -270,12 +330,15 @@ export default function ChatPage() {
       try {
         const res = await fetch(`/api/chat/tts?session=${encodeURIComponent(sid)}`);
         if (!res.ok) {
+          console.warn("[chat-tts] manifest not available:", res.status);
           releaseTts();
           return;
         }
         const { chunkCount } = (await res.json()) as { chunkCount: number };
         await playChunks(sid, chunkCount, fromChunk);
-      } catch {
+      } catch (e) {
+        console.error("[chat-tts] startTts failed:", e);
+        setError("Text-to-speech failed — press-and-hold to retry.");
         releaseTts();
       }
     },
@@ -304,7 +367,10 @@ export default function ChatPage() {
     void fetch(`/api/chat/session/${encodeURIComponent(sid)}/load`, { method: "POST" })
       .then((r) => r.json())
       .then((d: { text?: string }) => finish(d.text ?? ""))
-      .catch(() => releaseTts());
+      .catch((e) => {
+        console.error("[chat-tts] post-run load failed:", e);
+        releaseTts();
+      });
   }, [startTts, releaseTts]);
 
   // ── SSE ────────────────────────────────────────────────────────────────
