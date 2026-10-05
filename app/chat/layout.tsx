@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   // is visually distinct from pi-web in tabs and on the home screen.
   icons: {
     icon: [{ url: "/chat/icon.png", type: "image/png", sizes: "256x256" }],
-    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "256x256" }],
+    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "300x300" }],
   },
 };
 
