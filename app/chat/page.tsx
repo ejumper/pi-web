@@ -3,6 +3,13 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { Popup } from "@/components/chat/Popup";
+import {
+  attachments as attachmentsIcon,
+  models as modelsIcon,
+  newSession as newSessionIcon,
+  sessions as sessionsIcon,
+  voice as voiceIcon,
+} from "./icons";
 import "./chat.css";
 
 /**
@@ -81,6 +88,47 @@ function glowFor(phase: Phase, ampAvailable: boolean): { color: keyof typeof GLO
     default:
       return { color: "white", mode: "off" };
   }
+}
+
+// Minimal localStorage cache (stale-while-revalidate): on a slow link the
+// sessions list, models, voices and opened conversations render instantly
+// from cache while fresh copies load in the background.
+const CACHE_PREFIX = "pi-chat:";
+const CONVO_TEXT_CAP = 20_000;
+const CONVO_KEEP = 20;
+
+function readCacheValue<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + key);
+    return raw ? (JSON.parse(raw) as { v: T }).v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(CACHE_PREFIX + key, JSON.stringify({ t: Date.now(), v: value }));
+    if (key.startsWith("convo:")) pruneConvos();
+  } catch {
+    /* quota/private mode — caching is best-effort */
+  }
+}
+
+function pruneConvos(): void {
+  const entries: Array<{ key: string; t: number }> = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(CACHE_PREFIX + "convo:")) continue;
+    try {
+      const t = (JSON.parse(localStorage.getItem(key) ?? "") as { t?: number }).t ?? 0;
+      entries.push({ key, t });
+    } catch {
+      /* ignore malformed */
+    }
+  }
+  entries.sort((a, b) => b.t - a.t);
+  for (const stale of entries.slice(CONVO_KEEP)) localStorage.removeItem(stale.key);
 }
 
 export default function ChatPage() {
@@ -841,6 +889,8 @@ export default function ChatPage() {
 
   // ── popups ─────────────────────────────────────────────────────────────
   const refreshModels = useCallback(async () => {
+    const cachedModels = readCacheValue<ModelRow[]>("models");
+    if (cachedModels) setModels(cachedModels);
     if (!cwdRef.current) {
       const r = await fetch("/api/default-cwd", { method: "POST" }).catch(() => null);
       const d = (await r?.json()) as { cwd?: string } | undefined;
@@ -849,18 +899,27 @@ export default function ChatPage() {
     if (cwdRef.current) {
       const r = await fetch(`/api/models?cwd=${encodeURIComponent(cwdRef.current)}`).catch(() => null);
       const d = (await r?.json()) as { modelList?: ModelRow[] } | undefined;
-      if (d?.modelList) setModels(d.modelList);
+      if (d?.modelList) {
+        setModels(d.modelList);
+        writeCache("models", d.modelList);
+      }
     }
   }, []);
 
   // Warm the model list at load — it feeds the "<model> - <title>" label.
   useEffect(() => {
     void refreshModels();
+    const cachedVoices = readCacheValue<{ voices: string[]; current: string }>("voices");
+    if (cachedVoices) {
+      setVoices(cachedVoices.voices);
+      setVoice(cachedVoices.current);
+    }
     void fetch("/api/chat/voices")
       .then((r) => r.json())
       .then((d: { voices?: string[]; current?: string }) => {
         if (d.voices) setVoices(d.voices);
         if (d.current) setVoice(d.current);
+        if (d.voices && d.current) writeCache("voices", { voices: d.voices, current: d.current });
       })
       .catch(() => {});
   }, [refreshModels]);
@@ -875,9 +934,14 @@ export default function ChatPage() {
       if (d?.voices) setVoices(d.voices);
       if (d?.current) setVoice(d.current);
     } else if (which === "sessions") {
+      const cachedSessions = readCacheValue<SessionRow[]>("sessions");
+      if (cachedSessions) setSessions(cachedSessions);
       const r = await fetch("/api/chat/sessions").catch(() => null);
       const d = (await r?.json()) as { sessions?: SessionRow[] } | undefined;
-      setSessions(d?.sessions ?? []);
+      if (d?.sessions) {
+        setSessions(d.sessions);
+        writeCache("sessions", d.sessions);
+      }
     }
   }, [refreshModels]);
 
@@ -919,8 +983,14 @@ export default function ChatPage() {
       setPopup(null);
       setError(null);
       setSessionId(s.id);
-      setTitle(s.name);
-      setResponseText("");
+      const cachedConvo = readCacheValue<{ name: string; text: string }>(`convo:${s.id}`);
+      if (cachedConvo) {
+        setTitle(cachedConvo.name);
+        setResponseText(cachedConvo.text);
+      } else {
+        setTitle(s.name);
+        setResponseText("");
+      }
       setActivity("");
       setPhase("connecting");
       try {
@@ -934,6 +1004,10 @@ export default function ChatPage() {
         if (!res.ok) throw new Error(data.error || "Load failed");
         setTitle(data.name || s.name);
         setResponseText(data.text ?? "");
+        writeCache(`convo:${s.id}`, {
+          name: data.name || s.name,
+          text: (data.text ?? "").slice(0, CONVO_TEXT_CAP),
+        });
         if (data.model) setModelLabel(labelFor(data.model.provider, data.model.modelId));
         setPhase("idle");
         connectSSE(s.id);
@@ -1034,7 +1108,7 @@ export default function ChatPage() {
               title="Models"
               onClick={() => void openPopup("models")}
             >
-              <img className="bar-icon" src="/chat-icons/models.svg" alt="" />
+              <span className="bar-icon" style={{ "--icon": `url("${modelsIcon}")` } as CSSProperties} />
             </button>
             <button
               className="bar-btn"
@@ -1043,7 +1117,7 @@ export default function ChatPage() {
               title="Voice"
               onClick={() => void openPopup("voices")}
             >
-              <img className="bar-icon" src="/chat-icons/voice.svg" alt="" />
+              <span className="bar-icon" style={{ "--icon": `url("${voiceIcon}")` } as CSSProperties} />
             </button>
             <button
               className="bar-btn"
@@ -1052,7 +1126,7 @@ export default function ChatPage() {
               title="Attachments"
               onClick={() => void openPopup("attachments")}
             >
-              <img className="bar-icon" src="/chat-icons/attachments.svg" alt="" />
+              <span className="bar-icon" style={{ "--icon": `url("${attachmentsIcon}")` } as CSSProperties} />
             </button>
             <button
               className="bar-btn"
@@ -1061,7 +1135,7 @@ export default function ChatPage() {
               title="New session"
               onClick={startNewSession}
             >
-              <img className="bar-icon" src="/chat-icons/new-session.svg" alt="" />
+              <span className="bar-icon" style={{ "--icon": `url("${newSessionIcon}")` } as CSSProperties} />
             </button>
             <button
               className="bar-btn"
@@ -1070,7 +1144,7 @@ export default function ChatPage() {
               title="Sessions"
               onClick={() => void openPopup("sessions")}
             >
-              <img className="bar-icon" src="/chat-icons/sessions.svg" alt="" />
+              <span className="bar-icon" style={{ "--icon": `url("${sessionsIcon}")` } as CSSProperties} />
             </button>
           </div>
         </div>

@@ -20,5 +20,21 @@ export const viewport: Viewport = {
 };
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
-  return children;
+  return (
+    <>
+      {/* iOS Safari ignores user-scalable=no — block pinch zoom at the event
+          level (double-tap zoom is already off via touch-action). Runs before
+          the page markup, same trick as the root layout's tap guard. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `(function(){try{
+            var block=function(e){e.preventDefault();};
+            ["gesturestart","gesturechange","gestureend"].forEach(function(t){document.addEventListener(t,block,{passive:false});});
+            document.addEventListener("touchmove",function(e){if(e.touches.length>1)e.preventDefault();},{passive:false});
+          }catch(e){}})();`,
+        }}
+      />
+      {children}
+    </>
+  );
 }

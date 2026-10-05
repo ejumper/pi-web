@@ -1,8 +1,9 @@
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync } from "fs";
+import { join } from "path";
 import { getRpcSession, startRpcSession, type AgentSessionWrapper } from "./rpc-manager";
 import { allowFileRoot } from "./file-access";
 import { resolveDefaultWorkspace } from "./default-workspace";
-import { invalidateSessionListCache } from "./session-reader";
+import { getAgentDir, invalidateSessionListCache } from "./session-reader";
 import { DESKTOP_HOST } from "./desktop-host";
 
 /**
@@ -44,6 +45,23 @@ The user is talking to you by voice, hands-free (often while driving). Two thing
    - Keep it as short as the answer allows. Verbosity costs listening time.
 
 These rules apply to the FINAL answer the user hears. Use tools normally for research, but never dump raw tool output or structured data into the answer.`;
+
+/**
+ * The voice-chat prompt actually used for new sessions. The live copy lives at
+ * ~/.pi/agent/pi-chat-prompt.md (server: the pi-config bind mount
+ * /opt/pi-web/data/pi-agent-repo/agent/pi-chat-prompt.md) so it can be edited
+ * without rebuilding — read per session creation. The constant above is only
+ * the fallback when the file is missing or empty.
+ */
+export function loadChatPrompt(): string {
+  try {
+    const text = readFileSync(join(getAgentDir(), "pi-chat-prompt.md"), "utf8").trim();
+    if (text) return text;
+  } catch {
+    /* fall back to the compiled default */
+  }
+  return CHAT_SYSTEM_PROMPT;
+}
 
 // ---------------------------------------------------------------------------
 // Workspace
@@ -133,7 +151,7 @@ export async function ensureChatSession(
   const key = sessionId ?? `__chat_new__${Date.now()}`;
   const existed = getRpcSession(key)?.isAlive() ?? false;
   const { session, realSessionId } = await startRpcSession(key, sessionFile, chatWorkspace(), undefined, {
-    appendSystemPrompt: [CHAT_SYSTEM_PROMPT],
+    appendSystemPrompt: [loadChatPrompt()],
     excludeTools: ["code"],
   });
   invalidateSessionListCache();

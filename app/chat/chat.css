@@ -10,7 +10,9 @@
   background: #000;
   color: #eaeaea;
   overflow: hidden;
-  touch-action: manipulation;
+  /* pan-y: vertical scrolling works, double-tap AND pinch zoom are off
+     (iOS pinch is additionally blocked at the event level in layout.tsx) */
+  touch-action: pan-y;
   -webkit-tap-highlight-color: transparent;
   font-family: var(--font-noto-mono), ui-monospace, monospace;
   user-select: none;
@@ -107,6 +109,13 @@
   background:
     linear-gradient(#000, #000) padding-box,
     linear-gradient(22.5deg, #cfcfcf, #3a3a3a, #cfcfcf) border-box;
+  /* dark band through the top-left + bottom-right corners: the gradient axis
+     is perpendicular to that diagonal, i.e. atan2(bar height, bar width).
+     (~8deg for a phone-width bar, ~6.6deg at the 500px cap; the old fixed
+     22.5deg put the dark too far right of TL and left of BR.) */
+  background:
+    linear-gradient(#000, #000) padding-box,
+    linear-gradient(calc(atan2(58px, min(100vw - 1.5rem, 500px))), #cfcfcf, #3a3a3a, #cfcfcf) border-box;
 }
 .bar-btn {
   flex: 0 1 auto;
@@ -135,8 +144,10 @@
   width: 26px;
   height: 26px;
   display: block;
-  /* the icon svgs are pure black; an <img> + invert renders identically
-     everywhere (CSS mask tinting misrendered on iOS Safari) */
+  /* the icon svgs are pure black; background + invert renders identically
+     everywhere (CSS mask tinting misrendered on iOS Safari). Data URLs keep
+     the icons in this stylesheet — no per-icon requests on slow links. */
+  background: var(--icon) center / contain no-repeat;
   filter: invert(0.86);
 }
 
