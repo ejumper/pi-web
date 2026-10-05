@@ -1109,7 +1109,12 @@ export default function ChatPage() {
           {fullTitle}
         </div>
         <button className="chat-pi-btn" data-ui title="Open in pi-web" aria-label="Open in pi-web" onClick={openPiWeb}>
-          π
+          {/* strokes, not text — font glyph tables can never hide it */}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M5 6.5h14" />
+          <path d="M9 6.5V18" />
+          <path d="M15 6.5V15c0 2.2 1.2 3 3 3" />
+        </svg>
         </button>
       </div>
 

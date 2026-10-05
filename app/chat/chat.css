@@ -93,7 +93,10 @@
      (iOS pinch is additionally blocked at the event level in layout.tsx) */
   touch-action: pan-y;
   -webkit-tap-highlight-color: transparent;
-  font-family: "ProLisa", var(--font-noto-mono), ui-monospace, monospace;
+  /* named families before generics: browser font settings can remap
+     ui-monospace/monospace onto a font with broken glyphs (ProLisa),
+     named families resolve to the real thing */
+  font-family: "ProLisa", var(--font-noto-mono), "Noto Sans Mono", "DejaVu Sans Mono", ui-monospace, monospace;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -137,11 +140,6 @@
     linear-gradient(#000, #000) padding-box,
     linear-gradient(calc(atan2(42px, 42px)), #cfcfcf, #3a3a3a, #cfcfcf) border-box;
   color: #eaeaea;
-  /* pinned: never inherit ProLisa here — its pi glyph is blank (see the
-     @font-face note); system fonts always draw it */
-  font-family: system-ui, "Noto Sans", "DejaVu Sans", sans-serif;
-  font-size: 1.15rem;
-  font-weight: 700;
   cursor: pointer;
 }
 .chat-pi-btn:hover {
