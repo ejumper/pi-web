@@ -11,7 +11,6 @@ import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAg
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useKeyboardAbovePin } from "@/hooks/useKeyboardAbovePin";
 import { useStreamingSpacer } from "@/hooks/useStreamingSpacer";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
@@ -201,7 +200,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     isAutoModelSelection,
     agentPhase,
     isNew,
-    sessionIdRef, messagesEndRef, scrollContainerRef,
+    sessionIdRef, messagesEndRef, scrollContainerRef, attachScrollContainer,
     lastUserMsgRef,
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
@@ -371,12 +370,6 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
 
-  // Keep the empty-session composer pinned just above the mobile keyboard
-  // instead of jumping as the visual viewport shrinks (iOS). Android is
-  // handled by the resizes-content viewport meta; this is inert there.
-  const emptyComposerRef = useRef<HTMLDivElement>(null);
-  useKeyboardAbovePin(emptyComposerRef, isMobile && isEmptyNew);
-
   const availableThinkingLevels = displayModelValue
     ? (modelThinkingLevels[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
@@ -511,7 +504,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
 
       {isEmptyNew ? (
         <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
-          <div ref={emptyComposerRef} className="w-full max-w-[820px]">
+          <div className="w-full max-w-[820px]">
             <NoticeShelf notices={notices} align="right" />
             {chatInputElement}
           </div>
@@ -534,7 +527,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             <NoticeShelf notices={notices} floating align="right" />
           </div>
         </div>
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
+        <div ref={attachScrollContainer} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
               <ExtensionStatusBar statuses={extensionStatuses} />

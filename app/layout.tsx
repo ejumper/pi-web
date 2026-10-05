@@ -25,8 +25,7 @@ export const viewport: Viewport = {
   viewportFit: "cover",
   // Android Chrome: shrink the *layout* viewport when the keyboard opens so
   // flex/100vh containers resize and the composer sits above the keyboard
-  // instead of being covered. iOS ignores this (never implemented) — the
-  // useKeyboardAbovePin hook covers iOS via the visualViewport API.
+  // instead of being covered. iOS ignores this (never implemented).
   interactiveWidget: "resizes-content",
 };
 
@@ -46,6 +45,18 @@ export default function RootLayout({
         />
       </head>
       <body translate="no" className="notranslate" style={{ display: "flex", flexDirection: "column" }}>
+        {/* iOS WebKit "first tap fires no click" guard. Safari can get into a
+            state where taps stop producing click events page-wide until
+            reload — triggered by touchstart/touchmove listeners being added
+            and removed as the app runs. A single touchstart listener that is
+            registered before anything else and never removed keeps click
+            delivery healthy. It's passive and empty on purpose: it must exist,
+            not do anything. See docs/bug-list notes / SO 41972388. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{document.addEventListener("touchstart",function(){},{passive:true})}catch(e){}})();`,
+          }}
+        />
         {children}
       </body>
     </html>

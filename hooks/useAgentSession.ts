@@ -1729,18 +1729,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
   }, [markUserScrollIntent]);
 
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    container.addEventListener("wheel", markUserScrollIntent, { passive: true });
-    container.addEventListener("touchstart", markUserScrollIntent, { passive: true });
-    container.addEventListener("scroll", handleScrollPositionChange, { passive: true });
+  // Transcript-container listeners, attached once per DOM node via a callback
+  // ref instead of an effect keyed on `messages.length`/`loading`. That effect
+  // removed and re-added its listeners several times per agent run (every tool
+  // call/turn is a message entry, and the scroller mounts only once the session
+  // is non-empty), and touch-listener add/remove churn is a known iOS WebKit
+  // trigger for "first tap fires no click" episodes that then affect the whole
+  // page until reload. There is deliberately no `touchstart` here at all — the
+  // window `pointerdown` listener above fires for touches too and already marks
+  // scroll intent, so the touch listener was redundant as well as churny.
+  const attachScrollContainer = useCallback((node: HTMLDivElement | null) => {
+    scrollContainerRef.current = node;
+    if (!node) return;
+    node.addEventListener("wheel", markUserScrollIntent, { passive: true });
+    node.addEventListener("scroll", handleScrollPositionChange, { passive: true });
     return () => {
-      container.removeEventListener("wheel", markUserScrollIntent);
-      container.removeEventListener("touchstart", markUserScrollIntent);
-      container.removeEventListener("scroll", handleScrollPositionChange);
+      node.removeEventListener("wheel", markUserScrollIntent);
+      node.removeEventListener("scroll", handleScrollPositionChange);
+      if (scrollContainerRef.current === node) scrollContainerRef.current = null;
     };
-  }, [messages.length, loading, handleScrollPositionChange, markUserScrollIntent]);
+  }, [handleScrollPositionChange, markUserScrollIntent]);
 
   useEffect(() => {
     if (messages.length > 0) {
@@ -1816,7 +1824,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentPhase,
     isNew,
     // Refs
-    sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
+    sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef, attachScrollContainer,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
