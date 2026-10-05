@@ -29,9 +29,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!filePath) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
     const { session, fresh } = await ensureChatSession(id, filePath);
-    if (fresh) await applyChatModel(session);
+    const model = fresh ? await applyChatModel(session) : null;
     await session.send({ type: "prompt", message, images });
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, ...(model ? { model } : {}) });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

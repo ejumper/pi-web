@@ -25,13 +25,15 @@ export async function POST(req: Request) {
     }
 
     const { session, sessionId } = await ensureChatSession(null, "");
+    let model: { provider: string; modelId: string };
     if (body.model?.provider && body.model?.modelId) {
       await session.send({ type: "set_model", provider: body.model.provider, modelId: body.model.modelId });
+      model = body.model;
     } else {
-      await applyChatModel(session);
+      model = await applyChatModel(session);
     }
     await session.send({ type: "prompt", message, images });
-    return NextResponse.json({ sessionId });
+    return NextResponse.json({ sessionId, model });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

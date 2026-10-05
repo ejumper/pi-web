@@ -95,6 +95,7 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [ampAvailable, setAmpAvailable] = useState(false);
+  const [modelLabel, setModelLabel] = useState<string | null>(null);
 
   // ── refs ────────────────────────────────────────────────────────────────
   const phaseRef = useRef(phase);
@@ -143,6 +144,14 @@ export default function ChatPage() {
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  const labelFor = useCallback(
+    (provider: string, modelId: string): string => {
+      const m = models.find((x) => x.provider === provider && x.id === modelId);
+      return m?.name || `${provider}/${modelId}`;
+    },
+    [models],
+  );
 
   // ── audio graph (amplitude-synced glow + iOS audio unlock) ──────────────
   const ensureAudioGraph = useCallback(() => {
@@ -539,18 +548,24 @@ export default function ChatPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message, images: parts.images }),
         });
-        const data = (await res.json()) as { error?: string };
+        const data = (await res.json()) as { error?: string; model?: { provider: string; modelId: string } };
         if (!res.ok) throw new Error(data.error || "Send failed");
+        if (data.model) setModelLabel(labelFor(data.model.provider, data.model.modelId));
       } else {
         const res = await fetch("/api/chat/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message, images: parts.images, model: manualModelRef.current ?? undefined }),
         });
-        const data = (await res.json()) as { sessionId?: string; error?: string };
+        const data = (await res.json()) as {
+          sessionId?: string;
+          model?: { provider: string; modelId: string };
+          error?: string;
+        };
         if (!res.ok || !data.sessionId) throw new Error(data.error || "Send failed");
         sid = data.sessionId;
         setSessionId(sid);
+        if (data.model) setModelLabel(labelFor(data.model.provider, data.model.modelId));
       }
       setStaged([]);
       runActiveRef.current = true;
@@ -558,7 +573,7 @@ export default function ChatPage() {
       // Catch an agent_start that fired before the SSE connected.
       setTimeout(() => void reconcile(), 2_500);
     },
-    [buildPromptParts, connectSSE, reconcile, stopPlayback],
+    [buildPromptParts, connectSSE, labelFor, reconcile, stopPlayback],
   );
 
   // ── recording ──────────────────────────────────────────────────────────
@@ -823,25 +838,34 @@ export default function ChatPage() {
   }, []);
 
   // ── popups ─────────────────────────────────────────────────────────────
+  const refreshModels = useCallback(async () => {
+    if (!cwdRef.current) {
+      const r = await fetch("/api/default-cwd", { method: "POST" }).catch(() => null);
+      const d = (await r?.json()) as { cwd?: string } | undefined;
+      cwdRef.current = d?.cwd ?? "";
+    }
+    if (cwdRef.current) {
+      const r = await fetch(`/api/models?cwd=${encodeURIComponent(cwdRef.current)}`).catch(() => null);
+      const d = (await r?.json()) as { modelList?: ModelRow[] } | undefined;
+      if (d?.modelList) setModels(d.modelList);
+    }
+  }, []);
+
+  // Warm the model list at load — it feeds the "<model> - <title>" label.
+  useEffect(() => {
+    void refreshModels();
+  }, [refreshModels]);
+
   const openPopup = useCallback(async (which: "models" | "attachments" | "sessions") => {
     setPopup(which);
     if (which === "models") {
-      if (!cwdRef.current) {
-        const r = await fetch("/api/default-cwd", { method: "POST" }).catch(() => null);
-        const d = (await r?.json()) as { cwd?: string } | undefined;
-        cwdRef.current = d?.cwd ?? "";
-      }
-      if (cwdRef.current) {
-        const r = await fetch(`/api/models?cwd=${encodeURIComponent(cwdRef.current)}`).catch(() => null);
-        const d = (await r?.json()) as { modelList?: ModelRow[] } | undefined;
-        setModels(d?.modelList ?? []);
-      }
+      await refreshModels();
     } else if (which === "sessions") {
       const r = await fetch("/api/chat/sessions").catch(() => null);
       const d = (await r?.json()) as { sessions?: SessionRow[] } | undefined;
       setSessions(d?.sessions ?? []);
     }
-  }, []);
+  }, [refreshModels]);
 
   // Sessions popup: scrolled to the bottom (most recent) on open.
   useEffect(() => {
@@ -861,6 +885,7 @@ export default function ChatPage() {
     } else {
       manualModelRef.current = { provider: m.provider, modelId: m.id };
     }
+    setModelLabel(m.name || `${m.provider}/${m.id}`);
     setPopup(null);
   }, []);
 
@@ -876,10 +901,16 @@ export default function ChatPage() {
       setPhase("connecting");
       try {
         const res = await fetch(`/api/chat/session/${encodeURIComponent(s.id)}/load`, { method: "POST" });
-        const data = (await res.json()) as { name?: string; text?: string; error?: string };
+        const data = (await res.json()) as {
+          name?: string;
+          text?: string;
+          model?: { provider: string; modelId: string };
+          error?: string;
+        };
         if (!res.ok) throw new Error(data.error || "Load failed");
         setTitle(data.name || s.name);
         setResponseText(data.text ?? "");
+        if (data.model) setModelLabel(labelFor(data.model.provider, data.model.modelId));
         setPhase("idle");
         connectSSE(s.id);
       } catch (e) {
@@ -887,7 +918,7 @@ export default function ChatPage() {
         setError(String(e instanceof Error ? e.message : e));
       }
     },
-    [connectSSE, stopPlayback],
+    [connectSSE, labelFor, stopPlayback],
   );
 
   const startNewSession = useCallback(() => {
@@ -898,6 +929,7 @@ export default function ChatPage() {
     runActiveRef.current = false;
     setSessionId(null);
     setTitle("New session");
+    setModelLabel(null);
     setResponseText("");
     setActivity("");
     setError(null);
@@ -932,6 +964,7 @@ export default function ChatPage() {
   // ── render ─────────────────────────────────────────────────────────────
   const glow = glowFor(phase, ampAvailable);
   const showActivity = phase === "working";
+  const fullTitle = modelLabel ? `${modelLabel} - ${title}` : title;
 
   return (
     <div
@@ -942,8 +975,8 @@ export default function ChatPage() {
       onPointerCancel={handlePointerCancel}
     >
       <div className="chat-top">
-        <div className="chat-title" title={title}>
-          {title}
+        <div className="chat-title" title={fullTitle}>
+          {fullTitle}
         </div>
       </div>
 
