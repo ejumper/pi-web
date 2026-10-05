@@ -81,16 +81,22 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 0.35rem 0.5rem 0.6rem;
+  padding: 0.35rem 0.75rem 0.6rem;
+  min-width: 0;
+}
+/* the chips+bar column: without this the flex item shrinks to its content
+   and the bar never spans the viewport (the spacing bug) */
+.chat-bottom-inner {
+  width: 100%;
+  /* the cap only ever engages on desktop screens */
+  max-width: 500px;
   min-width: 0;
 }
 .bottom-bar {
-  /* full width on phones; the cap only ever engages on desktop screens */
   width: 100%;
-  max-width: 860px;
   display: flex;
   align-items: center;
-  /* even gaps between icons AND between the end icons and the pill ends */
+  /* equal gaps between icons AND between the end icons and the pill ends */
   justify-content: space-evenly;
   padding: 0.45rem 0.25rem;
   /* "transparent" pill with a light→dark→light gradient hairline at 22.5°:
@@ -109,9 +115,18 @@
   justify-content: center;
   background: none;
   border: none;
-  padding: 0.45rem 0.55rem;
+  /* no horizontal padding — space-evenly must distribute the ICONS
+     themselves for the edge gaps to equal the icon gaps */
+  padding: 0.45rem 0;
   border-radius: 999px;
   cursor: pointer;
+  position: relative;
+}
+/* invisible tap-target padding around each icon (touch needs ~44px) */
+.bar-btn::before {
+  content: "";
+  position: absolute;
+  inset: -8px -12px;
 }
 .bar-btn:hover {
   background: rgba(255, 255, 255, 0.08);

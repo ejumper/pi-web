@@ -1016,7 +1016,7 @@ export default function ChatPage() {
       </div>
 
       <div className="chat-bottom">
-        <div>
+        <div className="chat-bottom-inner">
           {staged.length > 0 && (
             <div className="pending-chips">
               {staged.map((s, i) => (
