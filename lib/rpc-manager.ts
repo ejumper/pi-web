@@ -19,6 +19,18 @@ export interface AgentEvent {
   [key: string]: unknown;
 }
 
+/**
+ * Optional per-session creation knobs for startRpcSession. Used by the /chat
+ * voice page (app/chat) to append its own system-prompt instructions and drop
+ * specific tools without touching pi-web's normal session creation.
+ */
+export interface RpcSessionOptions {
+  /** Extra system-prompt text appended after pi's normal context files (same as the CLI's --append-system-prompt). */
+  appendSystemPrompt?: string[];
+  /** Tool names to exclude from the session's tool set (e.g. ["code"]). */
+  excludeTools?: string[];
+}
+
 type EventListener = (event: AgentEvent) => void;
 
 type PendingUiResponse = {
@@ -131,6 +143,7 @@ export class AgentSessionWrapper {
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
+  private agentEndListeners = new Set<() => void>();
   private _alive = true;
 
   constructor(public readonly inner: AgentSessionLike) {}
@@ -156,6 +169,7 @@ export class AgentSessionWrapper {
       this.resetIdleTimer();
       if (event.type === "agent_end") {
         invalidateSessionListCache();
+        this.notifyAgentEnd();
         if (isNotifyEnabled(this.sessionId)) {
           // Fire-and-forget, and deliberately not awaited: this must not
           // block or fail the actual agent session. Runs server-side (not
@@ -288,6 +302,24 @@ export class AgentSessionWrapper {
 
   onDestroy(cb: () => void): void {
     this.onDestroyCallback = cb;
+  }
+
+  /** Subscribe to run-completion (agent_end). Returns an unsubscribe function. Errors are swallowed — listeners must not break the run. */
+  onAgentEnd(cb: () => void): () => void {
+    this.agentEndListeners.add(cb);
+    return () => {
+      this.agentEndListeners.delete(cb);
+    };
+  }
+
+  private notifyAgentEnd(): void {
+    for (const cb of this.agentEndListeners) {
+      try {
+        cb();
+      } catch {
+        /* ignore listener errors */
+      }
+    }
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
@@ -1072,7 +1104,8 @@ export async function startRpcSession(
   sessionId: string,
   sessionFile: string,
   cwd: string,
-  toolNames?: string[]
+  toolNames?: string[],
+  options?: RpcSessionOptions,
 ): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
   const registry = getRegistry();
   const locks = getLocks();
@@ -1108,11 +1141,18 @@ export async function startRpcSession(
 
     // Build services first so extension-registered providers are available
     // before the SDK restores the saved model from the session file.
-    const services = await createAgentSessionServices({ cwd, agentDir });
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      ...(options?.appendSystemPrompt?.length
+        ? { resourceLoaderOptions: { appendSystemPrompt: options.appendSystemPrompt } }
+        : {}),
+    });
     const { session: inner } = await createAgentSessionFromServices({
       services,
       sessionManager,
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+      ...(options?.excludeTools?.length ? { excludeTools: options.excludeTools } : {}),
     });
 
     // If specific tool names were requested (non-empty), set the active tools to the

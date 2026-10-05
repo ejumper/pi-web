@@ -22,10 +22,13 @@ const execFileP = promisify(execFile);
 
 const MIMO_URL =
   process.env.MIMO_API_URL || "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
-const MODEL = "mimo-v2.5-asr";
 const MIMO_TIMEOUT_MS = 30_000;
 const FFMPEG_TIMEOUT_MS = 20_000;
 const MAX_UPLOAD_BYTES = 25_000_000;
+
+// Model overridable per deployment (MIMO_ASR_MODEL) — the gateway only offers
+// one ASR model today (mimo-v2.5-asr), but the name shouldn't be baked in.
+const MODEL = process.env.MIMO_ASR_MODEL || "mimo-v2.5-asr";
 
 // whole whitespace-delimited token shaped like [optional <][optional /]word> —
 // e.g. "<chinese>", "think>", "</think>". Real prose tokens ("5>", "ok") don't match.
