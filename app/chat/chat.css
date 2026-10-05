@@ -1,12 +1,12 @@
 /* /chat voice page — see app/chat/page.tsx. Black canvas, 3-box grid
-   (20% title / response / 20% bottom bar), edge glow overlay, gradient-border
-   bottom bar, shared popup template styling. */
+   (10% title / response / 10% bottom bar), edge glow overlay, gradient-border
+   pill bottom bar, shared popup template styling. */
 
 .chat-root {
   position: relative;
   height: 100dvh;
   display: grid;
-  grid-template-rows: 20% 1fr 20%;
+  grid-template-rows: 10% 1fr 10%;
   background: #000;
   color: #eaeaea;
   overflow: hidden;
@@ -22,11 +22,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.25rem 1.5rem;
+  padding: 0.5rem 1.5rem;
   min-width: 0;
 }
 .chat-title {
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   text-decoration: underline;
   text-underline-offset: 4px;
   max-width: 100%;
@@ -40,15 +40,18 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: none;
-  padding: 0.5rem 1.5rem;
+  padding: 0.25rem 1.5rem 1rem;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  /* editor-style: text starts at the top and flows down */
+  justify-content: flex-start;
 }
 .chat-middle::-webkit-scrollbar {
   display: none;
 }
 .chat-activity {
+  /* auto margins keep the activity line vertically centered in the middle box */
+  margin: auto 0;
   text-align: center;
   font-size: 1.15rem;
   line-height: 1.6;
@@ -78,39 +81,44 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 0.75rem 1rem 1rem;
+  padding: 0.35rem 1rem 0.6rem;
   min-width: 0;
 }
 .bottom-bar {
   width: min(100%, 720px);
   display: flex;
   align-items: center;
-  padding: 0.55rem 1.1rem;
-  /* "transparent" bar with a light→dark→light gradient hairline at 22.5°:
+  padding: 0.45rem 1.4rem;
+  /* "transparent" pill with a light→dark→light gradient hairline at 22.5°:
      the border-box gradient shows only through the transparent border; the
      padding-box black reads as transparent against the page. */
   border: 1.5px solid transparent;
-  border-radius: 30%;
+  border-radius: 999px;
   background:
     linear-gradient(#000, #000) padding-box,
     linear-gradient(22.5deg, #cfcfcf, #3a3a3a, #cfcfcf) border-box;
 }
 .bar-btn {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
-  color: #dcdcdc;
-  font: inherit;
-  font-size: 0.95rem;
-  padding: 0.45rem 0.6rem;
-  border-radius: 10px;
+  padding: 0.35rem;
+  border-radius: 999px;
   cursor: pointer;
 }
 .bar-btn:hover {
   background: rgba(255, 255, 255, 0.08);
 }
-.bar-btn:disabled {
-  color: #666;
+.bar-icon {
+  width: 26px;
+  height: 26px;
+  background-color: #dcdcdc;
+  /* the icon svgs are black-fill shapes; masking lets one color handle them */
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
 }
 
 /* Attachment chips peek above the bar before they are sent */
@@ -119,7 +127,7 @@
   gap: 0.5rem;
   flex-wrap: wrap;
   justify-content: center;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.5rem;
 }
 .pending-chip {
   font-size: 0.8rem;
@@ -133,61 +141,118 @@
   white-space: nowrap;
 }
 
-/* ── Edge glow overlay ────────────────────────────────────────────────── */
+/* ── Edge glow overlay ───────────────────────────────────────────────────
+   The look (example glow.jpg): a wide, soft, feathered halo hugging the
+   rounded screen edge — two stacked blurred border rings (wide halo + bright
+   core), not a thin stroke. The "connecting" state is a single soft segment
+   traveling around the border (conic-gradient ring), not a dashed line. */
+
+@property --glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
 .glow-overlay {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 50;
+  --glow-radius: clamp(28px, 9vmin, 64px);
 }
-.glow-svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-  filter:
-    drop-shadow(0 0 5px var(--glow-color, transparent))
-    drop-shadow(0 0 16px var(--glow-color, transparent));
+.glow-edge {
+  position: absolute;
+  inset: 0;
 }
-.glow-rect {
-  fill: none;
-  stroke: var(--glow-color, transparent);
-  stroke-width: 3;
-  vector-effect: non-scaling-stroke;
+.glow-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--glow-radius);
+  border-style: solid;
+  border-color: var(--glow-color, transparent);
 }
-.glow--off .glow-rect {
-  stroke: transparent;
+.glow-layer--wide {
+  border-width: 22px;
+  filter: blur(18px);
+  opacity: 0.8;
 }
-.glow--steady .glow-rect {
-  opacity: 0.85;
+.glow-layer--core {
+  border-width: 5px;
+  filter: blur(2px) drop-shadow(0 0 10px var(--glow-color, transparent));
 }
-.glow--pulse .glow-rect {
+.glow-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--glow-radius);
+  padding: 14px;
+  background: conic-gradient(
+    from var(--glow-angle),
+    transparent 0deg 262deg,
+    var(--glow-color) 338deg,
+    transparent 360deg
+  );
+  /* keep only the border ring of that gradient */
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: blur(6px) drop-shadow(0 0 14px var(--glow-color, transparent));
+  animation: glowSpin 1.3s linear infinite;
+}
+
+.glow--off .glow-edge,
+.glow--off .glow-arc {
+  opacity: 0;
+}
+.glow--arc .glow-edge {
+  opacity: 0;
+}
+.glow--arc .glow-arc {
+  opacity: 1;
+}
+.glow--pulse .glow-arc {
+  opacity: 0;
+}
+.glow--pulse .glow-edge {
   animation: glowPulse 1.5s ease-in-out infinite;
 }
-.glow--arc .glow-rect {
-  stroke-dasharray: 25 75;
-  animation: glowTravel 1.15s linear infinite;
+.glow--steady .glow-arc {
+  opacity: 0;
 }
-/* amplitude-driven ("pulse lines up with speech"): no keyframes, the rect's
-   opacity follows --glow-amp which page.tsx updates from the audio analyser */
-.glow--audio .glow-rect {
-  opacity: calc(0.45 + 0.55 * var(--glow-amp, 0.4));
-  stroke-width: calc(3px + 2px * var(--glow-amp, 0.4));
+.glow--steady .glow-edge {
+  opacity: 0.85;
 }
+/* amplitude-driven ("pulse lines up with speech"): the halo follows
+   --glow-amp, updated per frame from the audio analyser in page.tsx */
+.glow--audio .glow-arc {
+  opacity: 0;
+}
+.glow--audio .glow-edge {
+  opacity: calc(0.5 + 0.5 * var(--glow-amp, 0.4));
+}
+.glow--audio .glow-layer--core {
+  border-width: calc(5px + 3px * var(--glow-amp, 0.4));
+}
+
 @keyframes glowPulse {
   0%,
   100% {
-    opacity: 0.45;
+    opacity: 0.5;
   }
   50% {
     opacity: 1;
   }
 }
-@keyframes glowTravel {
+@keyframes glowSpin {
   from {
-    stroke-dashoffset: 0;
+    --glow-angle: 0deg;
   }
   to {
-    stroke-dashoffset: -100;
+    --glow-angle: 360deg;
   }
 }
 

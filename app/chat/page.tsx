@@ -890,6 +890,20 @@ export default function ChatPage() {
     [connectSSE, stopPlayback],
   );
 
+  const startNewSession = useCallback(() => {
+    stopPlayback();
+    esRef.current?.close();
+    esRef.current = null;
+    manualModelRef.current = null;
+    runActiveRef.current = false;
+    setSessionId(null);
+    setTitle("New session");
+    setResponseText("");
+    setActivity("");
+    setError(null);
+    setPhase("idle");
+  }, [stopPlayback]);
+
   // ── attachments staging ────────────────────────────────────────────────
   const stageFiles = useCallback((files: FileList | null) => {
     if (!files) return;
@@ -956,14 +970,41 @@ export default function ChatPage() {
             </div>
           )}
           <div className="bottom-bar">
-            <button className="bar-btn" data-ui onClick={() => void openPopup("models")}>
-              Models
+            <button
+              className="bar-btn"
+              data-ui
+              aria-label="Models"
+              title="Models"
+              onClick={() => void openPopup("models")}
+            >
+              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/models.svg)" } as CSSProperties} />
             </button>
-            <button className="bar-btn" data-ui onClick={() => void openPopup("attachments")}>
-              Attachments
+            <button
+              className="bar-btn"
+              data-ui
+              aria-label="Attachments"
+              title="Attachments"
+              onClick={() => void openPopup("attachments")}
+            >
+              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/attachments.svg)" } as CSSProperties} />
             </button>
-            <button className="bar-btn" data-ui onClick={() => void openPopup("sessions")}>
-              Sessions
+            <button
+              className="bar-btn"
+              data-ui
+              aria-label="New session"
+              title="New session"
+              onClick={startNewSession}
+            >
+              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/new-session.svg)" } as CSSProperties} />
+            </button>
+            <button
+              className="bar-btn"
+              data-ui
+              aria-label="Sessions"
+              title="Sessions"
+              onClick={() => void openPopup("sessions")}
+            >
+              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/sessions.svg)" } as CSSProperties} />
             </button>
           </div>
         </div>
@@ -974,9 +1015,11 @@ export default function ChatPage() {
         ref={glowRef}
         style={{ "--glow-color": glow.mode === "off" ? "transparent" : GLOW_COLORS[glow.color] } as CSSProperties}
       >
-        <svg className="glow-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <rect className="glow-rect" x="0.5" y="0.5" width="99" height="99" pathLength="100" />
-        </svg>
+        <div className="glow-edge">
+          <div className="glow-layer glow-layer--wide" />
+          <div className="glow-layer glow-layer--core" />
+        </div>
+        <div className="glow-arc" />
       </div>
 
       <audio ref={audioRef} style={{ display: "none" }} />
