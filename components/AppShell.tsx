@@ -1024,7 +1024,9 @@ export function AppShell() {
                   width: 36, height: "100%", padding: 0,
                   background: "none", border: "none", borderRight: "1px solid var(--border)",
                   color: "var(--text-muted)", cursor: "pointer", flexShrink: 0,
-                  transition: "color 0.12s", fontFamily: "inherit", fontSize: 16, fontWeight: 700,
+                  transition: "color 0.12s",
+                  fontFamily: 'system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+                  fontSize: 16, fontWeight: 700,
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}

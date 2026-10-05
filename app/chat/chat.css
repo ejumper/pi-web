@@ -10,6 +10,10 @@
   font-weight: 100;
   font-style: normal;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: "ProLisa";
@@ -19,6 +23,10 @@
   font-weight: 100;
   font-style: italic;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: "ProLisa";
@@ -28,6 +36,10 @@
   font-weight: 400;
   font-style: normal;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: "ProLisa";
@@ -37,6 +49,10 @@
   font-weight: 400;
   font-style: italic;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: "ProLisa";
@@ -46,6 +62,10 @@
   font-weight: 700;
   font-style: normal;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
   font-family: "ProLisa";
@@ -55,6 +75,10 @@
   font-weight: 700;
   font-style: italic;
   font-display: swap;
+  /* ProLisa draws non-Latin glyphs (e.g. the pi symbol) BLANK while claiming
+     the codepoint, which hides them in Blink — restrict it to Latin so anything
+     else falls through to the fonts that actually render it. */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 .chat-root {
@@ -113,7 +137,9 @@
     linear-gradient(#000, #000) padding-box,
     linear-gradient(calc(atan2(42px, 42px)), #cfcfcf, #3a3a3a, #cfcfcf) border-box;
   color: #eaeaea;
-  font-family: inherit;
+  /* pinned: never inherit ProLisa here — its pi glyph is blank (see the
+     @font-face note); system fonts always draw it */
+  font-family: system-ui, "Noto Sans", "DejaVu Sans", sans-serif;
   font-size: 1.15rem;
   font-weight: 700;
   cursor: pointer;
