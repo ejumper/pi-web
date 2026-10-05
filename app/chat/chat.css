@@ -81,17 +81,18 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 0.35rem 1rem 0.6rem;
+  padding: 0.35rem 0.5rem 0.6rem;
   min-width: 0;
 }
 .bottom-bar {
-  width: min(100%, 720px);
+  /* full width on phones; the cap only ever engages on desktop screens */
+  width: 100%;
+  max-width: 860px;
   display: flex;
   align-items: center;
-  /* space-between with short end padding spreads the four icons right out
-     to the pill's ends (equal gaps between adjacent buttons) */
-  justify-content: space-between;
-  padding: 0.45rem 1.1rem;
+  /* even gaps between icons AND between the end icons and the pill ends */
+  justify-content: space-evenly;
+  padding: 0.45rem 0.25rem;
   /* "transparent" pill with a light→dark→light gradient hairline at 22.5°:
      the border-box gradient shows only through the transparent border; the
      padding-box black reads as transparent against the page. */
@@ -118,10 +119,10 @@
 .bar-icon {
   width: 26px;
   height: 26px;
-  background-color: #dcdcdc;
-  /* the icon svgs are black-fill shapes; masking lets one color handle them */
-  -webkit-mask: var(--icon) center / contain no-repeat;
-  mask: var(--icon) center / contain no-repeat;
+  display: block;
+  /* the icon svgs are pure black; an <img> + invert renders identically
+     everywhere (CSS mask tinting misrendered on iOS Safari) */
+  filter: invert(0.86);
 }
 
 /* Attachment chips peek above the bar before they are sent */

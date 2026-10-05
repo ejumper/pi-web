@@ -90,8 +90,10 @@ export default function ChatPage() {
   const [title, setTitle] = useState("New session");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [popup, setPopup] = useState<"models" | "attachments" | "sessions" | null>(null);
+  const [popup, setPopup] = useState<"models" | "voices" | "attachments" | "sessions" | null>(null);
   const [models, setModels] = useState<ModelRow[]>([]);
+  const [voices, setVoices] = useState<string[]>([]);
+  const [voice, setVoice] = useState("");
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [ampAvailable, setAmpAvailable] = useState(false);
@@ -854,12 +856,24 @@ export default function ChatPage() {
   // Warm the model list at load — it feeds the "<model> - <title>" label.
   useEffect(() => {
     void refreshModels();
+    void fetch("/api/chat/voices")
+      .then((r) => r.json())
+      .then((d: { voices?: string[]; current?: string }) => {
+        if (d.voices) setVoices(d.voices);
+        if (d.current) setVoice(d.current);
+      })
+      .catch(() => {});
   }, [refreshModels]);
 
-  const openPopup = useCallback(async (which: "models" | "attachments" | "sessions") => {
+  const openPopup = useCallback(async (which: "models" | "voices" | "attachments" | "sessions") => {
     setPopup(which);
     if (which === "models") {
       await refreshModels();
+    } else if (which === "voices") {
+      const r = await fetch("/api/chat/voices").catch(() => null);
+      const d = (await r?.json()) as { voices?: string[]; current?: string } | undefined;
+      if (d?.voices) setVoices(d.voices);
+      if (d?.current) setVoice(d.current);
     } else if (which === "sessions") {
       const r = await fetch("/api/chat/sessions").catch(() => null);
       const d = (await r?.json()) as { sessions?: SessionRow[] } | undefined;
@@ -886,6 +900,16 @@ export default function ChatPage() {
       manualModelRef.current = { provider: m.provider, modelId: m.id };
     }
     setModelLabel(m.name || `${m.provider}/${m.id}`);
+    setPopup(null);
+  }, []);
+
+  const pickVoice = useCallback(async (v: string) => {
+    const res = await fetch("/api/chat/voices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice: v }),
+    }).catch(() => null);
+    if (res?.ok) setVoice(v);
     setPopup(null);
   }, []);
 
@@ -1010,7 +1034,16 @@ export default function ChatPage() {
               title="Models"
               onClick={() => void openPopup("models")}
             >
-              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/models.svg)" } as CSSProperties} />
+              <img className="bar-icon" src="/chat-icons/models.svg" alt="" />
+            </button>
+            <button
+              className="bar-btn"
+              data-ui
+              aria-label="Voice"
+              title="Voice"
+              onClick={() => void openPopup("voices")}
+            >
+              <img className="bar-icon" src="/chat-icons/voice.svg" alt="" />
             </button>
             <button
               className="bar-btn"
@@ -1019,7 +1052,7 @@ export default function ChatPage() {
               title="Attachments"
               onClick={() => void openPopup("attachments")}
             >
-              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/attachments.svg)" } as CSSProperties} />
+              <img className="bar-icon" src="/chat-icons/attachments.svg" alt="" />
             </button>
             <button
               className="bar-btn"
@@ -1028,7 +1061,7 @@ export default function ChatPage() {
               title="New session"
               onClick={startNewSession}
             >
-              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/new-session.svg)" } as CSSProperties} />
+              <img className="bar-icon" src="/chat-icons/new-session.svg" alt="" />
             </button>
             <button
               className="bar-btn"
@@ -1037,7 +1070,7 @@ export default function ChatPage() {
               title="Sessions"
               onClick={() => void openPopup("sessions")}
             >
-              <span className="bar-icon" style={{ "--icon": "url(/chat-icons/sessions.svg)" } as CSSProperties} />
+              <img className="bar-icon" src="/chat-icons/sessions.svg" alt="" />
             </button>
           </div>
         </div>
@@ -1074,6 +1107,20 @@ export default function ChatPage() {
             models.map((m) => (
               <button key={`${m.provider}/${m.id}`} className="popup-row" data-ui onClick={() => void selectModel(m)}>
                 {m.name || m.id} · {m.provider}
+              </button>
+            ))
+          )}
+        </Popup>
+      )}
+
+      {popup === "voices" && (
+        <Popup title="Voice" onClose={() => setPopup(null)}>
+          {voices.length === 0 ? (
+            <div className="popup-empty">No voices available</div>
+          ) : (
+            voices.map((v) => (
+              <button key={v} className="popup-row" data-ui aria-selected={v === voice} onClick={() => void pickVoice(v)}>
+                {v}
               </button>
             ))
           )}

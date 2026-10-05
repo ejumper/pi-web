@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { buildWavHeader, getChunksForEntry, getLastAssistantEntryId } from "./speak";
@@ -24,7 +24,10 @@ import { markChatTtsBusy } from "./chat-runtime";
 const TTS_ROUTER_URL = `http://${DESKTOP_HOST}:8880`;
 const MIMO_URL = (process.env.MIMO_API_URL || "https://token-plan-sgp.xiaomimimo.com/v1").replace(/\/$/, "");
 const MIMO_TTS_MODEL = process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts-voiceclone";
-const VOICE = process.env.PI_CHAT_TTS_VOICE || "emma_w";
+const VOICE_SETTINGS_PATH = join(homedir(), ".pi", "agent", "pi-chat-voice.json");
+// Compose env is the FALLBACK — a voice picked in the UI persists to
+// pi-chat-voice.json (next to pi's own config) and wins until changed.
+const DEFAULT_VOICE = process.env.PI_CHAT_TTS_VOICE || "emma_w";
 // Container: /app/voices (read-only mount of /opt/pi-web/data/voices). Desktop
 // dev: the live Read-Aloud voice library.
 const VOICES_DIR =
@@ -48,6 +51,42 @@ declare global {
 function cache(): SingleSlotCache {
   if (!globalThis.__piChatTtsCache) globalThis.__piChatTtsCache = { key: "", chunks: new Map() };
   return globalThis.__piChatTtsCache;
+}
+
+/** Voice names from the shared wav library (same dir for the local server and the MiMo voiceclone fallback). */
+export function listChatVoices(): string[] {
+  try {
+    return readdirSync(VOICES_DIR)
+      .filter((f) => f.toLowerCase().endsWith(".wav"))
+      .map((f) => f.slice(0, -4))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export function getChatVoice(): string {
+  try {
+    if (existsSync(VOICE_SETTINGS_PATH)) {
+      const data = JSON.parse(readFileSync(VOICE_SETTINGS_PATH, "utf8")) as { voice?: string };
+      if (data.voice) return data.voice;
+    }
+  } catch {
+    /* fall through to the compose default */
+  }
+  return DEFAULT_VOICE;
+}
+
+/** Persist the picked voice. Returns false when the wav doesn't exist. */
+export function setChatVoice(voice: string): boolean {
+  if (!listChatVoices().includes(voice)) return false;
+  writeFileSync(VOICE_SETTINGS_PATH, JSON.stringify({ voice }, null, 2));
+  // Cached audio was synthesized in the old voice — drop it so replays
+  // regenerate in the new one.
+  const c = cache();
+  c.key = "";
+  c.chunks.clear();
+  return true;
 }
 
 /** Chunk plan for a session's latest assistant message, or null when there is nothing speakable. */
@@ -85,19 +124,19 @@ export async function chatTtsChunk(sessionId: string, chunkIndex: number): Promi
   // only extends the window; the client's explicit playback busy claim can't
   // be shortened by a later prefetch synthesis.)
   markChatTtsBusy(sessionId, true, 180_000);
-  const result = await synthesize(text);
+  const result = await synthesize(text, getChatVoice());
   c.chunks.set(chunkIndex, result);
   return result;
 }
 
-async function synthesize(text: string): Promise<ChatTtsChunk> {
+async function synthesize(text: string, voice: string): Promise<ChatTtsChunk> {
   if (await routerHealthy()) {
     const res = await fetch(`${TTS_ROUTER_URL}/v1/audio/speech`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         input: text,
-        voice: VOICE,
+        voice,
         model: "tts-1-en",
         // response_format is effectively ignored by the router's local backend:
         // it always streams raw PCM s16le 24 kHz mono ("mp3" gets the same,
@@ -120,7 +159,7 @@ async function synthesize(text: string): Promise<ChatTtsChunk> {
     const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
     return { buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length), raw]), mime: "audio/wav" };
   }
-  return synthesizeViaMimo(text);
+  return synthesizeViaMimo(text, voice);
 }
 
 async function routerHealthy(): Promise<boolean> {
@@ -139,11 +178,11 @@ async function routerHealthy(): Promise<boolean> {
  * cloud backend (tts_router.py gen_chunk): the reference wav rides along as a
  * base64 data URL per request, and the reply is a base64 WAV at 24 kHz mono.
  */
-async function synthesizeViaMimo(text: string): Promise<ChatTtsChunk> {
+async function synthesizeViaMimo(text: string, voice: string): Promise<ChatTtsChunk> {
   const apiKey = process.env.MIMO_API_KEY;
   if (!apiKey) throw new Error("MIMO_API_KEY not set and TTS router unreachable");
 
-  const voicePath = join(VOICES_DIR, `${VOICE}.wav`);
+  const voicePath = join(VOICES_DIR, `${voice}.wav`);
   if (!existsSync(voicePath)) {
     throw new Error(`voice reference wav missing: ${voicePath}`);
   }
