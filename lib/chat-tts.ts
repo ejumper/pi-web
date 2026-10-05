@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { getChunksForEntry, getLastAssistantEntryId } from "./speak";
+import { buildWavHeader, getChunksForEntry, getLastAssistantEntryId } from "./speak";
 import { DESKTOP_HOST } from "./desktop-host";
 import { markChatTtsBusy } from "./chat-runtime";
 
@@ -99,7 +99,11 @@ async function synthesize(text: string): Promise<ChatTtsChunk> {
         input: text,
         voice: VOICE,
         model: "tts-1-en",
-        response_format: "mp3",
+        // response_format is effectively ignored by the router's local backend:
+        // it always streams raw PCM s16le 24 kHz mono ("mp3" gets the same,
+        // just with a different (wrong) content-type label). So ask for "pcm"
+        // and normalize ourselves — see normalization below.
+        response_format: "pcm",
         // The router's optimized backend is ~20x faster with stream:true even
         // though we buffer the whole response (see pi-web read-aloud notes).
         stream: true,
@@ -108,7 +112,13 @@ async function synthesize(text: string): Promise<ChatTtsChunk> {
       signal: AbortSignal.timeout(180_000),
     });
     if (!res.ok) throw new Error(`TTS router returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    return { buf: Buffer.from(await res.arrayBuffer()), mime: "audio/mpeg" };
+    const raw = Buffer.from(await res.arrayBuffer());
+    // Normalize to a real WAV file: if the body already carries a RIFF header
+    // pass it through, otherwise wrap the raw PCM in one. The client always
+    // receives valid audio/wav — raw PCM mislabeled as mp3 was the silent-
+    // playback bug this normalization exists for.
+    const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
+    return { buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length), raw]), mime: "audio/wav" };
   }
   return synthesizeViaMimo(text);
 }

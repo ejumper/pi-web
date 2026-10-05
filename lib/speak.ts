@@ -140,7 +140,8 @@ export function setCachedAudio(sessionId: string, entryId: string, chunkIndex: n
   audioCache().set(`${sessionId}:${entryId}:${chunkIndex}`, buf);
 }
 
-function buildWavHeader(pcmLength: number, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
+/** 44-byte WAV header for raw PCM s16le (24 kHz mono by default). */
+export function buildWavHeader(pcmLength: number, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
   const blockAlign = (channels * bitsPerSample) / 8;
   const header = Buffer.alloc(44);

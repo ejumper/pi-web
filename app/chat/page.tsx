@@ -279,7 +279,11 @@ export default function ChatPage() {
         let url: string;
         try {
           url = await chunkUrl(sid, i);
-        } catch {
+        } catch (e) {
+          console.error("[chat-tts] chunk fetch failed:", e);
+          setError(
+            `Text-to-speech failed (${e instanceof Error ? e.message : "chunk error"}) — press-and-hold to retry.`,
+          );
           break;
         }
         if (playbackRef.current.stopped || gen !== playbackRef.current.gen) break;
