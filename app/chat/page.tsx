@@ -978,7 +978,7 @@ export default function ChatPage() {
   }, []);
 
   const openSession = useCallback(
-    async (s: SessionRow) => {
+    async (s: SessionRow, modelOverride?: { provider: string; modelId: string }) => {
       stopPlayback();
       setPopup(null);
       setError(null);
@@ -994,7 +994,11 @@ export default function ChatPage() {
       setActivity("");
       setPhase("connecting");
       try {
-        const res = await fetch(`/api/chat/session/${encodeURIComponent(s.id)}/load`, { method: "POST" });
+        const res = await fetch(`/api/chat/session/${encodeURIComponent(s.id)}/load`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelOverride }),
+        });
         const data = (await res.json()) as {
           name?: string;
           text?: string;
@@ -1018,6 +1022,34 @@ export default function ChatPage() {
     },
     [connectSSE, labelFor, stopPlayback],
   );
+
+  // Deep link (?session=<id>&model=<provider>/<id>) — the pi-web π button lands
+  // here. An explicit model is a deliberate hand-off and beats the addie check.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current || typeof window === "undefined") return;
+    deepLinkHandled.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("session");
+    if (!sid) return;
+    const modelRef = params.get("model");
+    let model: { provider: string; modelId: string } | undefined;
+    if (modelRef?.includes("/")) {
+      const i = modelRef.indexOf("/");
+      model = { provider: modelRef.slice(0, i), modelId: modelRef.slice(i + 1) };
+      manualModelRef.current = model;
+      setModelLabel(labelFor(model.provider, model.modelId));
+    }
+    window.history.replaceState({}, "", "/chat");
+    void openSession({ id: sid, name: "", modified: "" }, model);
+  }, [openSession, labelFor]);
+
+  // π — back to plain pi-web with this session (its model follows from the
+  // session file), or the plain page when nothing is open.
+  const openPiWeb = useCallback(() => {
+    const sid = sessionIdRef.current;
+    window.location.href = sid ? `/?session=${encodeURIComponent(sid)}` : "/";
+  }, []);
 
   const startNewSession = useCallback(() => {
     stopPlayback();
@@ -1076,6 +1108,9 @@ export default function ChatPage() {
         <div className="chat-title" title={fullTitle}>
           {fullTitle}
         </div>
+        <button className="chat-pi-btn" data-ui title="Open in pi-web" aria-label="Open in pi-web" onClick={openPiWeb}>
+          π
+        </button>
       </div>
 
       <div className="chat-middle" ref={middleRef}>

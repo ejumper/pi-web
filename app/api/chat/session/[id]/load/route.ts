@@ -5,17 +5,26 @@ import { listAllSessions, resolveSessionPath } from "@/lib/session-reader";
 export const runtime = "nodejs";
 
 // POST /api/chat/session/[id]/load — "re-open a session" for the voice page:
-// attach the agent, re-run the addie/default-cloud model check (spec: every
-// reload re-decides), and return the title + last assistant text for display.
+// attach the agent, pick the model (an explicit `model` in the body — the π
+// button hand-off — beats the check; otherwise every reload re-runs the
+// addie/default-cloud check per spec), and return the title + last assistant
+// text for display.
 
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
+    const body = (await req.json().catch(() => ({}))) as { model?: { provider: string; modelId: string } };
     const filePath = await resolveSessionPath(id);
     if (!filePath) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
     const { session } = await ensureChatSession(id, filePath);
-    const model = await applyChatModel(session);
+    let model: { provider: string; modelId: string };
+    if (body.model?.provider && body.model?.modelId) {
+      await session.send({ type: "set_model", provider: body.model.provider, modelId: body.model.modelId });
+      model = body.model;
+    } else {
+      model = await applyChatModel(session);
+    }
 
     let name = "";
     const cwd = chatWorkspace();

@@ -12,6 +12,15 @@ const notoSansMono = Noto_Sans_Mono({
 export const metadata: Metadata = {
   title: "Pi Agent Web",
   description: "Pi Coding Agent Web Interface",
+  // Brand icons are served per deployment from /branding/* (PI_WEB_BRAND
+  // selects server vs desktop art) — favicon, apple-touch-icon and the PWA
+  // manifest all resolve there.
+  icons: {
+    icon: [{ url: "/branding/icon.png", type: "image/png", sizes: "278x277" }],
+    apple: [{ url: "/branding/apple-icon.png", type: "image/png", sizes: "278x277" }],
+  },
+  manifest: "/branding/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Pi Web", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {

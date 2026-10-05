@@ -109,6 +109,28 @@ export function AppShell() {
     }).catch(() => {});
   }, [selectedSession?.id, notifyEnabled]);
 
+  // π — jump to the /chat voice page carrying this session and its model.
+  // Replaces the voicemail-notify button (its purpose is covered by /chat now).
+  const handleOpenChat = useCallback(() => {
+    const sid = selectedSession?.id;
+    if (!sid) {
+      window.location.href = "/chat";
+      return;
+    }
+    const go = (model?: string) => {
+      const q = new URLSearchParams({ session: sid });
+      if (model) q.set("model", model);
+      window.location.href = `/chat?${q.toString()}`;
+    };
+    void fetch(`/api/agent/${encodeURIComponent(sid)}`)
+      .then((r) => r.json())
+      .then((d: { state?: { model?: { provider?: string; id?: string } } }) => {
+        const m = d.state?.model;
+        go(m?.provider && m?.id ? `${m.provider}/${m.id}` : undefined);
+      })
+      .catch(() => go());
+  }, [selectedSession?.id]);
+
   // Session stats (tokens + cost) — populated by ChatWindow, displayed in top bar
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
@@ -958,6 +980,8 @@ export function AppShell() {
                   <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
+              {/* Voicemail-notify button — retired 2026-10: /chat covers its
+                  purpose. Code kept for a possible return:
               {(() => {
                 const notifyActive = selectedSession ? notifyEnabled : notifyPendingForNewSession;
                 return (
@@ -990,6 +1014,23 @@ export function AppShell() {
                   </button>
                 );
               })()}
+              */}
+              <button
+                onClick={handleOpenChat}
+                title={selectedSession ? "Open this session in the voice chat" : "Open voice chat"}
+                aria-label="Open voice chat (/chat)"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 36, height: "100%", padding: 0,
+                  background: "none", border: "none", borderRight: "1px solid var(--border)",
+                  color: "var(--text-muted)", cursor: "pointer", flexShrink: 0,
+                  transition: "color 0.12s", fontFamily: "inherit", fontSize: 16, fontWeight: 700,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
+              >
+                π
+              </button>
             </div>
           )}
           {/* Session stats — right-aligned in top bar */}

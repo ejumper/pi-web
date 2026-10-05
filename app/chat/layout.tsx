@@ -3,12 +3,14 @@ import type { Metadata, Viewport } from "next";
 export const metadata: Metadata = {
   title: "Pi Voice Chat",
   description: "Hands-free voice chat with pi",
-  // /chat keeps its own favicon + iOS home-screen icon (pwa-icon.png) so it
-  // is visually distinct from pi-web in tabs and on the home screen.
+  // /chat keeps its own favicon + home-screen icon + manifest (pi-sonar-chat)
+  // so it is visually distinct from pi-web in tabs and on home screens.
   icons: {
-    icon: [{ url: "/chat/icon.png", type: "image/png", sizes: "256x256" }],
-    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "300x300" }],
+    icon: [{ url: "/chat/icon.png", type: "image/png", sizes: "278x277" }],
+    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "278x277" }],
   },
+  manifest: "/branding/chat-manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Pi Voice Chat", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {

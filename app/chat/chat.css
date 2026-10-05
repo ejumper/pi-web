@@ -2,6 +2,61 @@
    (10% title / response / 10% bottom bar), edge glow overlay, gradient-border
    pill bottom bar, shared popup template styling. */
 
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-Thin.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-Thin.ttf") format("truetype");
+  font-weight: 100;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-ThinItalic.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-ThinItalic.ttf") format("truetype");
+  font-weight: 100;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-Regular.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-RegularItalic.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-RegularItalic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-Bold.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "ProLisa";
+  src:
+    url("/chat-fonts/ProLisa-BoldItalic.woff2") format("woff2"),
+    url("/chat-fonts/ProLisa-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 .chat-root {
   position: relative;
   height: 100dvh;
@@ -14,7 +69,7 @@
      (iOS pinch is additionally blocked at the event level in layout.tsx) */
   touch-action: pan-y;
   -webkit-tap-highlight-color: transparent;
-  font-family: var(--font-noto-mono), ui-monospace, monospace;
+  font-family: "ProLisa", var(--font-noto-mono), ui-monospace, monospace;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -35,6 +90,38 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* π — back to plain pi-web (top right of the title bar), circular border in
+   the same light→dark→light gradient style as the bottom bar */
+.chat-top {
+  position: relative;
+}
+.chat-pi-btn {
+  position: absolute;
+  right: 1.15rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+  background:
+    linear-gradient(#000, #000) padding-box,
+    linear-gradient(calc(atan2(42px, 42px)), #cfcfcf, #3a3a3a, #cfcfcf) border-box;
+  color: #eaeaea;
+  font-family: inherit;
+  font-size: 1.15rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.chat-pi-btn:hover {
+  background:
+    linear-gradient(#111, #111) padding-box,
+    linear-gradient(calc(atan2(42px, 42px)), #e5e5e5, #4a4a4a, #e5e5e5) border-box;
 }
 
 /* ── Middle box: response / activity ──────────────────────────────────── */
