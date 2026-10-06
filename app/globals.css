@@ -542,7 +542,7 @@ span.linenumber {
    palette hexes micro renders; light values are readable equivalents.
    See components/editor/extensions/microMarkdown.ts. */
 :root {
-  --md-heading: #1d4ed8;     /* the one heading blue (bands, underlines, text) */
+  --md-heading: #3265ff;     /* the one heading blue (bands, underlines, text) */
   --md-h1-text: #ffffff;     /* text on the h1 band — white in both themes */
   --md-strong: #111111;
   --md-emphasis: #111111;
@@ -554,7 +554,7 @@ span.linenumber {
 }
 
 html.dark {
-  --md-heading: #2fafff;     /* modus-vivendi blue */
+  --md-heading: #3265ff;     /* the one heading blue */
   --md-h1-text: #ffffff;
   --md-strong: #ffffff;
   --md-emphasis: #ffffff;
@@ -569,7 +569,11 @@ html.dark {
    look). .cm-activeLine sets the `background` shorthand and would wipe it
    the moment the caret lands on the line, hence the compound override.
    The line box includes softWrapIndent's 1rem left padding, so the band
-   starts at the row's true left edge like micro's row fill. */
+   starts at the row's true left edge like micro's row fill.
+   Also: h3-style text-width underlines propagate into nested markup spans
+   (### marks etc.) and each span paints its slice in its own
+   decoration-color — microMarkdown pins the marks' decoration-color so the
+   whole underline stays blue. */
 .md-h1-row {
   background: var(--md-heading);
 }

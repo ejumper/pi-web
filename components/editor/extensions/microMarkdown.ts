@@ -32,13 +32,16 @@ export const microMarkdownHighlightStyle = HighlightStyle.define([
   // h2: blue bold-italic, NO text-decoration — .md-h2-row::after draws the
   // underline across the whole line instead.
   { tag: t.heading2, color: "var(--md-heading)", fontWeight: "bold", fontStyle: "italic" },
-  // h3: blue bold-italic, underlined under the text only
+  // h3: blue bold-italic, underlined under the text only. The decoration
+  // color is pinned (here and on the marks below): the propagated underline
+  // would otherwise be painted gray under the `###` marks.
   {
     tag: t.heading3,
     color: "var(--md-heading)",
     fontWeight: "bold",
     fontStyle: "italic",
     textDecoration: "underline",
+    textDecorationColor: "var(--md-heading)",
   },
   // h4-h6: blue bold-italic, no underline
   {
@@ -61,8 +64,13 @@ export const microMarkdownHighlightStyle = HighlightStyle.define([
   { tag: t.strikethrough, textDecoration: "line-through" },
   // horizontal rules (micro special)
   { tag: t.contentSeparator, color: "var(--md-hr)" },
-  // all markup punctuation (#, *, >, `, bullets): receded gray
-  { tag: [t.processingInstruction, t.escape], color: "var(--md-mark)" },
+  // all markup punctuation (#, *, >, `, bullets): receded gray — the
+  // decoration-color pin keeps h3 underlines blue under the marks
+  {
+    tag: [t.processingInstruction, t.escape],
+    color: "var(--md-mark)",
+    textDecorationColor: "var(--md-heading)",
+  },
 ]);
 
 // Row treatments: h1 = full-width blue band, h2 = full-width underline.
