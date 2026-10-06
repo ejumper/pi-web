@@ -453,11 +453,16 @@ export function AppShell() {
   // (replaces the old sidebar Files section).
   const handleNewFileTab = useCallback(() => {
     const tabId = `browse:${Date.now()}`;
-    setFileTabs((prev) => [...prev, { id: tabId, label: "Browse", filePath: "", explorer: true }]);
+    // The browser opens focused on the previous tab's file's parent dir —
+    // that's where the work is (or close to the file you want next).
+    const prevFile = (fileTabs.find((t) => t.id === activeFileTabId && t.filePath)
+      ?? [...fileTabs].reverse().find((t) => !!t.filePath)) ?? null;
+    const focusPath = prevFile ? prevFile.filePath.slice(0, prevFile.filePath.lastIndexOf("/")) : null;
+    setFileTabs((prev) => [...prev, { id: tabId, label: "Browse", filePath: "", explorer: true, focusPath }]);
     setActiveFileTabId(tabId);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+  }, [isMobile, fileTabs, activeFileTabId]);
 
   // Opening a file FROM a browser tab replaces that tab's content (the tab
   // is a scratch "Browse" slot, so no edit state is lost). If the file is
@@ -548,9 +553,14 @@ export function AppShell() {
   }, []);
 
   const handleToggleFileIncluded = useCallback(() => {
-    setFileTabs((prev) => prev.map((t) => (
-      t.id === activeFileTabId ? { ...t, included: !(t.included ?? true) } : t
-    )));
+    setFileTabs((prev) => {
+      // Target the active tab's file, or the most recent file tab when a
+      // Browse tab is active — the same file the auto-@mention means.
+      const active = prev.find((t) => t.id === activeFileTabId && t.filePath);
+      const target = active ?? [...prev].reverse().find((t) => !!t.filePath);
+      if (!target) return prev;
+      return prev.map((t) => (t.id === target.id ? { ...t, included: !(t.included ?? true) } : t));
+    });
   }, [activeFileTabId]);
 
   // The active editor tab, if any, and (when its "include" toggle is on) the
@@ -558,9 +568,14 @@ export function AppShell() {
   // same format/mechanism as the manual @ button, just automatic. Available
   // regardless of whether the right file panel itself is open.
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
-  const activeFileIncluded = activeFileTab?.included ?? true;
-  const pendingFileMention = (activeFileTab && activeFileTab.filePath && activeFileIncluded)
-    ? buildAtMentionText(getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined), false)
+  // The file the "open file" controls mean: the active tab's file, or the
+  // most recent file tab when the active tab is a Browse tab.
+  const effectiveFileTab = (activeFileTab && activeFileTab.filePath)
+    ? activeFileTab
+    : [...fileTabs].reverse().find((t) => !!t.filePath) ?? null;
+  const activeFileIncluded = effectiveFileTab?.included ?? true;
+  const pendingFileMention = (effectiveFileTab && activeFileIncluded)
+    ? buildAtMentionText(getRelativeFilePath(effectiveFileTab.filePath, activeCwd ?? undefined), false)
     : null;
 
   // A moved file/dir shouldn't leave any open tab pointing at a now-stale
@@ -1354,7 +1369,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
-              hasOpenFile={!!(activeFileTab && activeFileTab.filePath)}
+              hasOpenFile={!!effectiveFileTab}
               fileIncluded={activeFileIncluded}
               onToggleFileIncluded={handleToggleFileIncluded}
               pendingFileMention={pendingFileMention}
@@ -1449,7 +1464,7 @@ export function AppShell() {
               }}
             >
               {tab.explorer ? (
-                <FileTree onOpenFile={(p) => handleOpenFileIntoTab(tab.id, p)} />
+                <FileTree focusPath={tab.focusPath} onOpenFile={(p) => handleOpenFileIntoTab(tab.id, p)} />
               ) : (
               <FileViewer
                 filePath={tab.filePath}

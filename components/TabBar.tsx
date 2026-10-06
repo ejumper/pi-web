@@ -11,6 +11,8 @@ export interface Tab {
   dirty?: boolean;
   /** A blank tab showing the file browser instead of a file. */
   explorer?: boolean;
+  /** Directory the browser tab should reveal + select on mount. */
+  focusPath?: string | null;
   /** Whether this file is auto-@mentioned with the next chat prompt. Default: true. */
   included?: boolean;
 }
