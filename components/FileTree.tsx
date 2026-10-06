@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Tree, type TreeApi } from "react-arborist";
 import { getFileIcon } from "./FileIcons";
-import { BookmarkMenu, ConfirmDialog, addBookmark } from "./BookmarkMenu";
+import { BookmarkMenu, addBookmark } from "./BookmarkMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useFileBookmarks } from "@/lib/file-bookmarks";
 
 interface FileTreeNode {

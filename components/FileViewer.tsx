@@ -14,6 +14,14 @@ import { getSyntaxHighlightExtension } from "@/components/editor/extensions/them
 import { microMarkdown } from "@/components/editor/extensions/microMarkdown";
 import { loadLanguageForFile } from "@/components/editor/language";
 import {
+  clearEditorDraft,
+  getEditorCursor,
+  getEditorDraft,
+  saveEditorCursor,
+  saveEditorDraft,
+  type EditorDraft,
+} from "@/lib/editor-drafts";
+import {
   DOCX_PREVIEW_MAX_BYTES,
   getFileExt,
   isAudioPath,
@@ -746,6 +754,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
+  const [draftBanner, setDraftBanner] = useState<EditorDraft | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const esRef = useRef<EventSource | null>(null);
@@ -812,6 +821,71 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     });
   }, [fetchContent, filePath]);
 
+  // ---- unsaved-draft recovery (see lib/editor-drafts.ts) ----
+  // iOS kills standalone PWAs with no warning, so dirty buffers are
+  // snapshotted ~2s after typing stops (and on pagehide/tab-hide) and
+  // offered back when the file is next opened.
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftCheckedRef = useRef(false);
+
+  const snapshotDraft = useCallback(() => {
+    const view = viewRef.current;
+    const cursor = view ? view.state.selection.main.head : null;
+    if (cursor !== null) saveEditorCursor(filePath, cursor);
+    if (!dirtyRef.current) return;
+    saveEditorDraft(filePath, { content: latestDocRef.current, cursor, ts: Date.now() });
+  }, [filePath]);
+
+  const scheduleDraftSnapshot = useCallback(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(snapshotDraft, 2000);
+  }, [snapshotDraft]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") snapshotDraft();
+    };
+    window.addEventListener("pagehide", snapshotDraft);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", snapshotDraft);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, [snapshotDraft]);
+
+  // After the initial load: a stored draft differing from disk means the
+  // app died with unsaved edits — offer to restore it. Once per tab.
+  useEffect(() => {
+    if (draftCheckedRef.current || !data || dirty) return;
+    draftCheckedRef.current = true;
+    const d = getEditorDraft(filePath);
+    if (!d) return;
+    if (d.content !== data.content) setDraftBanner(d);
+    else clearEditorDraft(filePath);
+  }, [data, dirty, filePath]);
+
+  const restoreDraft = useCallback(() => {
+    const d = draftBanner;
+    setDraftBanner(null);
+    const view = viewRef.current;
+    if (!view || !d) return;
+    isProgrammaticUpdateRef.current = true;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: d.content } });
+    isProgrammaticUpdateRef.current = false;
+    if (d.cursor !== null && d.cursor <= view.state.doc.length) {
+      view.dispatch({ selection: { anchor: d.cursor }, scrollIntoView: true });
+    }
+    dirtyRef.current = true;
+    setDirty(true);
+    view.focus();
+  }, [draftBanner]);
+
+  const discardDraft = useCallback(() => {
+    clearEditorDraft(filePath);
+    setDraftBanner(null);
+  }, [filePath]);
+
   const handleSave = useCallback((forceMtime?: string) => {
     setSaveState("saving");
     setSaveError(null);
@@ -836,6 +910,8 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
         setData((prev) => (prev ? { ...prev, content: latestDocRef.current, mtime: json.mtime!, size: json.size ?? prev.size } : prev));
         dirtyRef.current = false;
         setDirty(false);
+        clearEditorDraft(filePath);
+        setDraftBanner(null);
         setConflict(null);
         setSaveState("idle");
       })
@@ -1080,6 +1156,33 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Unsaved-draft recovery — the app may have been killed with edits */}
+      {draftBanner && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "6px 16px",
+          borderBottom: "1px solid var(--border)",
+          background: "color-mix(in srgb, var(--accent) 8%, var(--bg))",
+          fontSize: 12, color: "var(--text)", flexShrink: 0,
+        }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Unsaved draft recovered ({new Date(draftBanner.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+          </span>
+          <button
+            onClick={restoreDraft}
+            style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, border: "1px solid var(--accent)", background: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 600, flexShrink: 0 }}
+          >
+            Restore
+          </button>
+          <button
+            onClick={discardDraft}
+            style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, border: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}
+          >
+            Discard
+          </button>
+        </div>
+      )}
+
       {/* Status bar */}
       <div
         ref={statusBarRef}
@@ -1416,6 +1519,10 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               onReady={(view) => {
                 viewRef.current = view;
                 applyHighlighting(view);
+                const savedCursor = getEditorCursor(filePath);
+                if (savedCursor !== null && savedCursor <= view.state.doc.length) {
+                  view.dispatch({ selection: { anchor: savedCursor }, scrollIntoView: true });
+                }
                 view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
                 onEditorViewChange?.(view);
                 const pending = loadLanguageForFile(filePath);
@@ -1432,6 +1539,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               onDocChange={(docString) => {
                 latestDocRef.current = docString;
                 setCounts(countText(docString));
+                scheduleDraftSnapshot();
                 if (!isProgrammaticUpdateRef.current && !dirtyRef.current) {
                   dirtyRef.current = true;
                   setDirty(true);

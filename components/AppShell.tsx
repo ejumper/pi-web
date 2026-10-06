@@ -11,6 +11,7 @@ import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { FileTree } from "./FileTree";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -193,7 +194,61 @@ export function AppShell() {
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
+  const [closeConfirm, setCloseConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+
+  // ---- file-tab persistence (survives iOS app kills / reloads) — see
+  // lib/editor-drafts.ts for the unsaved-content side of this. ----
+  const tabsRestoredRef = useRef(false);
+  const tabsPersistSkipRef = useRef(true);
+  useEffect(() => {
+    if (tabsRestoredRef.current) return;
+    tabsRestoredRef.current = true;
+    try {
+      const raw = window.localStorage.getItem("pi-web:file-tabs");
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        tabs?: { filePath: string; sourceSessionId?: string | null }[];
+        activeFilePath?: string | null;
+        rightPanelOpen?: boolean;
+      };
+      const restored = (saved.tabs ?? [])
+        .filter((t) => t && t.filePath)
+        .map((t) => ({
+          id: `file:${t.filePath}`,
+          label: getFileName(t.filePath),
+          filePath: t.filePath,
+          sourceSessionId: t.sourceSessionId ?? null,
+          included: true,
+        }));
+      if (restored.length > 0) {
+        setFileTabs(restored);
+        const active = restored.find((t) => t.filePath === saved.activeFilePath) ?? restored[restored.length - 1];
+        setActiveFileTabId(active.id);
+      }
+      if (saved.rightPanelOpen) setRightPanelOpen(true);
+    } catch { /* corrupt state — ignore */ }
+  }, []);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+
+  // Persist the open file tabs (debounced). The first run is skipped — it
+  // happens before the restore above lands, and a fresh visit must not
+  // overwrite saved state with "no tabs".
+  useEffect(() => {
+    if (tabsPersistSkipRef.current) {
+      tabsPersistSkipRef.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      try {
+        window.localStorage.setItem("pi-web:file-tabs", JSON.stringify({
+          tabs: fileTabs.filter((x) => x.filePath).map((x) => ({ filePath: x.filePath, sourceSessionId: x.sourceSessionId })),
+          activeFilePath: fileTabs.find((x) => x.id === activeFileTabId)?.filePath ?? null,
+          rightPanelOpen,
+        }));
+      } catch { /* quota/unavailable — tab restore is best-effort */ }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [fileTabs, activeFileTabId, rightPanelOpen]);
   // Desktop full-width editor. Below the mobile breakpoint the panel is already a
   // full-viewport overlay; this brings that layout to wider viewports where the
   // default is a 42% split. Reset on close so the panel always comes back split.
@@ -531,11 +586,7 @@ export function AppShell() {
     handleNewSession(tempId, topBarNewSessionCwd);
   }, [handleNewSession, topBarNewSessionCwd]);
 
-  const handleCloseFileTab = useCallback((tabId: string) => {
-    const tab = fileTabs.find((t) => t.id === tabId);
-    if (tab?.dirty && !window.confirm(`Discard unsaved changes to "${tab.label}"?`)) {
-      return;
-    }
+  const actuallyCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => prev.filter((t) => t.id !== tabId));
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
@@ -543,6 +594,18 @@ export function AppShell() {
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
   }, [fileTabs]);
+
+  const handleCloseFileTab = useCallback((tabId: string) => {
+    const tab = fileTabs.find((t) => t.id === tabId);
+    if (tab?.dirty) {
+      setCloseConfirm({
+        message: `Discard unsaved changes to "${tab.label}"?`,
+        onConfirm: () => actuallyCloseFileTab(tabId),
+      });
+      return;
+    }
+    actuallyCloseFileTab(tabId);
+  }, [fileTabs, actuallyCloseFileTab]);
 
   const handleFileDirtyChange = useCallback((tabId: string, dirty: boolean) => {
     setFileTabs((prev) => {
@@ -664,6 +727,18 @@ export function AppShell() {
 
   const sidebarContent = (
     <>
+      {closeConfirm && (
+        <ConfirmDialog
+          message={closeConfirm.message}
+          confirmLabel="Discard"
+          onCancel={() => setCloseConfirm(null)}
+          onConfirm={() => {
+            const run = closeConfirm.onConfirm;
+            setCloseConfirm(null);
+            run();
+          }}
+        />
+      )}
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={handleSelectSession}
