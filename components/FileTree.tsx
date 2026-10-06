@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { Tree, type TreeApi } from "react-arborist";
 import { getFileIcon } from "./FileIcons";
 import { BookmarkMenu, ConfirmDialog, addBookmark } from "./BookmarkMenu";
+import { useFileBookmarks } from "@/lib/file-bookmarks";
 
 interface FileTreeNode {
   /** absolute path — doubles as the node id */
@@ -116,6 +117,9 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; node: { id: string; name: string; isDir: boolean } } | null>(null);
   const [confirmState, setConfirmState] = useState<{ message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
   const clip = useClipboard();
+  const bookmarks = useFileBookmarks();
+  const bookmarkSet = useMemo(() => new Set(bookmarks.map((b) => b.path)), [bookmarks]);
+  const menuRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<FileTreeNode> | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 320, height: 480 });
@@ -133,10 +137,16 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  // Close the context menu on click-away / Escape / scroll
+  // Close the context menu on any press OUTSIDE it — a containment check,
+  // deliberately NOT stopPropagation: relying on event ordering let the
+  // closing pointerdown unmount the menu before the click event landed,
+  // which silently killed every menu item's onClick.
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
+    const close = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      setMenu(null);
+    };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(null); };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", onKey);
@@ -486,7 +496,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
                 <span style={{ flexShrink: 0, display: "flex", width: 15, height: 15, alignItems: "center", justifyContent: "center" }}>
                   {getFileIcon(data.name)}
                 </span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: data.isDir && bookmarkSet.has(data.id) ? 700 : undefined, fontStyle: data.isDir && bookmarkSet.has(data.id) ? "italic" : undefined }}>
                   {data.name}
                 </span>
               </div>
@@ -498,6 +508,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
       {/* Right-click context menu */}
       {menu && (
         <div
+          ref={menuRef}
           style={{
             position: "fixed",
             left: Math.min(menu.x, window.innerWidth - 170),
@@ -512,8 +523,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
             padding: 4,
           }}
           onPointerDown={(e) => e.stopPropagation()}
-        >
-          {([
+        >          {([
             {
               label: "New file",
               disabled: false,
