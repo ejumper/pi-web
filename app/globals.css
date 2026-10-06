@@ -542,8 +542,8 @@ span.linenumber {
    palette hexes micro renders; light values are readable equivalents.
    See components/editor/extensions/microMarkdown.ts. */
 :root {
-  --md-h1: #1d4ed8;          /* h1/h2 — blue */
-  --md-h3: #2563eb;          /* h3-h6 — bright blue */
+  --md-heading: #1d4ed8;     /* the one heading blue (bands, underlines, text) */
+  --md-h1-text: #ffffff;     /* text on the h1 band — white in both themes */
   --md-strong: #111111;
   --md-emphasis: #111111;
   --md-code: #15803d;        /* inline + fenced code — green */
@@ -554,8 +554,8 @@ span.linenumber {
 }
 
 html.dark {
-  --md-h1: #2fafff;          /* modus-vivendi blue */
-  --md-h3: #79a8ff;          /* modus-vivendi blue-warmer (ANSI brightblue equiv) */
+  --md-heading: #2fafff;     /* modus-vivendi blue */
+  --md-h1-text: #ffffff;
   --md-strong: #ffffff;
   --md-emphasis: #ffffff;
   --md-code: #44bc44;        /* modus-vivendi green */
@@ -565,27 +565,36 @@ html.dark {
   --md-hr: #f78fe7;
 }
 
-/* Full-width h1 underline — the patched-micro h1 look, but anchored to the
-   text instead of the line element: .cm-line carries 1rem of left padding
-   (softWrapIndent), so a plain border-bottom started 16px left of the text
-   and sat at the line-box bottom (too low, too heavy).
-   Drawn as a positioned pseudo-element rather than a background gradient:
-   .cm-activeLine sets the `background` shorthand, which resets
-   background-image to none and would wipe a gradient the moment the cursor
-   lands on the line. A ::after layer paints above that background, so the
-   underline survives the active-line highlight. Tuned for the FileViewer's
-   13px / 1.6 mono. */
+/* h1 row band — the blue background fills the whole line (patched-micro
+   look). .cm-activeLine sets the `background` shorthand and would wipe it
+   the moment the caret lands on the line, hence the compound override.
+   The line box includes softWrapIndent's 1rem left padding, so the band
+   starts at the row's true left edge like micro's row fill. */
 .md-h1-row {
+  background: var(--md-heading);
+}
+.cm-activeLine.md-h1-row {
+  background: var(--md-heading);
+}
+
+/* h2 full-width underline — the old h1 look, anchored to the text instead
+   of the line element: .cm-line carries 1rem of left padding (softWrapIndent),
+   so a plain border-bottom started 16px left of the text and sat at the
+   line-box bottom (too low, too heavy). Drawn as a positioned pseudo-element
+   rather than a background gradient: .cm-activeLine resets background-image,
+   but a ::after layer paints above the background, so the underline survives
+   the active-line highlight. Tuned for the FileViewer's 13px / 1.6 mono. */
+.md-h2-row {
   position: relative;
 }
-.md-h1-row::after {
+.md-h2-row::after {
   content: "";
   position: absolute;
   left: 1rem;
   right: 0;
   top: 15px;
   height: 1px;
-  background: var(--md-h1);
+  background: var(--md-heading);
   pointer-events: none;
 }
 

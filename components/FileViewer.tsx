@@ -8,8 +8,8 @@ import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
 import { CodeMirrorHost } from "@/components/editor/CodeMirrorHost";
-import { useTwoFingerTap } from "@/hooks/useTwoFingerTap";
-import { buildTextEditorExtensions, createEditorCompartments, wrapExtension } from "@/components/editor/extensions";
+import { useTwoFingerGestures } from "@/hooks/useTwoFingerGestures";
+import { buildTextEditorExtensions, createEditorCompartments } from "@/components/editor/extensions";
 import { getSyntaxHighlightExtension } from "@/components/editor/extensions/theme";
 import { microMarkdown } from "@/components/editor/extensions/microMarkdown";
 import { loadLanguageForFile } from "@/components/editor/language";
@@ -738,7 +738,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const [error, setError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
   const [viewMode, setViewMode] = useState<"source" | "diff">("source");
-  const [wrapLines, setWrapLines] = useState(true);
   const [counts, setCounts] = useState<{ words: number; chars: number }>({ words: 0, chars: 0 });
   const [spellcheckOn, setSpellcheckOn] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -895,7 +894,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     setPrevContent(null);
     setPreviewMode(false);
     setViewMode("source");
-    setWrapLines(true);
     setSpellcheckOn(false);
     setCounts({ words: 0, chars: 0 });
     setChangeCount(0);
@@ -940,17 +938,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     setupWatch(filePath);
   }, [filePath, setupWatch]);
 
-  // Reconfigure the wrap compartment when the toggle changes (initial value
-  // is already baked into the extensions built for CodeMirrorHost's mount).
-  useEffect(() => {
-    viewRef.current?.dispatch({ effects: compartmentsRef.current.wrap.reconfigure(wrapExtension(wrapLines)) });
-  }, [wrapLines]);
-
-  // Reconfigure syntax highlighting when the app theme changes — markdown
-  // files layer the micro-matching style over the base theme.
+  // (Re)apply the syntax-highlight layer. Called from the effect below when
+  // the app theme or file type changes, and from CodeMirrorHost's onReady:
+  // toggling markdown preview unmounts and remounts the view, and without
+  // the onReady call the fresh view kept the plain default highlight style
+  // (the microMarkdown layer was lost on every preview round-trip).
   const isMarkdownFile = data?.language === "markdown";
-  useEffect(() => {
-    viewRef.current?.dispatch({
+  const applyHighlighting = useCallback((view: EditorView) => {
+    view.dispatch({
       effects: compartmentsRef.current.highlight.reconfigure(
         isMarkdownFile
           ? [microMarkdown(), getSyntaxHighlightExtension(isDark)]
@@ -958,6 +953,10 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
       ),
     });
   }, [isDark, isMarkdownFile]);
+
+  useEffect(() => {
+    if (viewRef.current) applyHighlighting(viewRef.current);
+  }, [applyHighlighting]);
 
   // Browser-native spellcheck — CM6 hard-disables it on the content DOM
   // (spellcheck="false"), so toggling means flipping the attribute back.
@@ -995,7 +994,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     () => buildTextEditorExtensions({
       compartments: compartmentsRef.current,
       isDark,
-      wrapEnabled: wrapLines,
+      wrapEnabled: true,
       onSave: () => handleSave(),
     }),
     // Only the initial values matter — CodeMirrorHost doesn't react to prop
@@ -1004,12 +1003,17 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     [],
   );
 
-  // Two-finger tap on the editor = save (a phone has no ctrl+S). Gated to
-  // when there's actually something to save; the wrapper below only renders
-  // in the editor branch, so it's already off in preview/diff modes.
-  const twoFingerSaveRef = useTwoFingerTap({
-    onTap: () => handleSave(),
-    enabled: dirty,
+  // Two-finger gestures on the editor (a phone has no keyboard shortcuts),
+  // Procreate-style: tap = undo, double-tap = redo, swipe up = save (save
+  // moved off the tap so tap/double-tap could become undo/redo). The wrapper
+  // below only renders in the editor branch, so the gestures are already
+  // off in preview/diff modes.
+  const twoFingerGesturesRef = useTwoFingerGestures({
+    onTap: () => handleUndo(),
+    onDoubleTap: () => handleRedo(),
+    onSwipeUp: () => {
+      if (dirtyRef.current) handleSave();
+    },
   });
 
   // Responsive status bar: progressively hide the least-important info
@@ -1024,7 +1028,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   const statusBarContentKey = [
     filePath, data?.language, data?.content.length, data?.size,
     watching, dirty, saveState, prevContent !== null && prevContent !== data?.content,
-    viewMode, wrapLines, previewMode,
+    viewMode, previewMode,
   ].join("|");
 
   useLayoutEffect(() => {
@@ -1239,31 +1243,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           </div>
         )}
 
-        {/* Word wrap toggle — left-justified lines icon */}
-        {viewMode === "source" && !previewMode && (
-          <button
-            onClick={() => setWrapLines((v) => !v)}
-            title={wrapLines ? "Disable word wrap" : "Enable word wrap"}
-            aria-label="Toggle word wrap"
-            aria-pressed={wrapLines}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              height: 20, width: 22, padding: 0,
-              background: wrapLines ? "var(--bg-selected)" : "var(--bg-hover)",
-              color: wrapLines ? "var(--text)" : "var(--text-muted)",
-              border: "1px solid var(--border)", borderRadius: 5,
-              flexShrink: 0,
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <line x1="3" y1="5" x2="21" y2="5" />
-              <line x1="3" y1="10" x2="17" y2="10" />
-              <line x1="3" y1="15" x2="21" y2="15" />
-              <line x1="3" y1="20" x2="13" y2="20" />
-            </svg>
-          </button>
-        )}
-
         {/* Spellcheck toggle — browser-native spellcheck, off by default */}
         {viewMode === "source" && !previewMode && (
           <button
@@ -1425,13 +1404,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             </ReactMarkdown>
           </div>
         ) : (
-          <div ref={twoFingerSaveRef} style={{ height: "100%" }}>
+          <div ref={twoFingerGesturesRef} style={{ height: "100%" }}>
             <CodeMirrorHost
               key={filePath}
               doc={latestDocRef.current || data.content}
               extensions={editorExtensions}
               onReady={(view) => {
                 viewRef.current = view;
+                applyHighlighting(view);
                 view.contentDOM.setAttribute("spellcheck", spellcheckOn ? "true" : "false");
                 onEditorViewChange?.(view);
                 const pending = loadLanguageForFile(filePath);

@@ -47,7 +47,6 @@ export interface BuildTextEditorExtensionsOptions {
 export function buildTextEditorExtensions(opts: BuildTextEditorExtensionsOptions): Extension[] {
   return [
     history(),
-    history(),
     drawSelection(),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
