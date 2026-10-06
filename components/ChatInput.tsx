@@ -259,7 +259,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
 
   // Publish the session-level controls to the sidebar's Controls section,
-  // which renders outside this component's subtree.
+  // which renders outside this component's subtree. Deps are explicit and
+  // the store ignores no-op publishes, so this can never feed a render loop.
   useEffect(() => {
     publishSessionControls({
       isStreaming,
@@ -269,7 +270,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       hasOpenFile, fileIncluded, onToggleFileIncluded,
       soundEnabled, onSoundToggle,
     });
-  });
+  }, [
+    isStreaming,
+    liveRemoteState, onGuardChange, onReadModeChange,
+    thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
+    toolPreset, onToolPresetChange,
+    hasOpenFile, fileIncluded, onToggleFileIncluded,
+    soundEnabled, onSoundToggle,
+  ]);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() => (
     draftKey ? getDraft(draftKey)?.images.map(draftImageToAttachedImage) ?? [] : []
   ));
