@@ -6,6 +6,7 @@ import { getFileIcon } from "./FileIcons";
 import { BookmarkMenu, addBookmark } from "./BookmarkMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useFileBookmarks } from "@/lib/file-bookmarks";
+import { useLongPress } from "@/hooks/useLongPress";
 
 interface FileTreeNode {
   /** absolute path — doubles as the node id */
@@ -121,6 +122,15 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
   const bookmarks = useFileBookmarks();
   const bookmarkSet = useMemo(() => new Set(bookmarks.map((b) => b.path)), [bookmarks]);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Long-press = right-click on touch devices (iOS's native contextmenu on
+  // long-press is unreliable — see hooks/useLongPress.ts).
+  const longPress = useLongPress<{ id: string; name: string; isDir: boolean }>({
+    onLongPress: (node, pos) => {
+      setSelectedId(node.id);
+      setMenu({ x: pos.x, y: pos.y, node });
+    },
+  });
   const treeRef = useRef<TreeApi<FileTreeNode> | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 320, height: 480 });
@@ -461,8 +471,14 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
                   fontSize: 13,
                   color: data.isDir ? "var(--text)" : "var(--text-muted)",
                   background: node.isSelected || data.id === selectedId ? "var(--bg-selected)" : "transparent",
+                  // no text selection / touch callouts on rows — they fight
+                  // long-press (iOS spends the hold on selection UI)
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                  WebkitTouchCallout: "none",
                 }}
                 onClick={() => {
+                  if (longPress.swallowClick()) return;
                   setSelectedId(data.id);
                   if (data.isDir) {
                     void (async () => {
@@ -478,6 +494,10 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
                     onOpenFile(data.id);
                   }
                 }}
+                onPointerDown={(e) => longPress.onPointerDown(e, { id: data.id, name: data.name, isDir: data.isDir })}
+                onPointerMove={longPress.onPointerMove}
+                onPointerUp={longPress.onPointerUp}
+                onPointerCancel={longPress.onPointerCancel}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setSelectedId(data.id);
