@@ -972,9 +972,13 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
     setCounts(data ? countText(data.content) : { words: 0, chars: 0 });
   }, [data]);
 
+  // Notify on dirty CHANGES only — via a ref so the (per-render) callback
+  // identity can never retrigger this effect and feed an update storm.
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
   useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
+    onDirtyChangeRef.current?.(dirty);
+  }, [dirty]);
 
   const handleUndo = useCallback(() => {
     const view = viewRef.current;

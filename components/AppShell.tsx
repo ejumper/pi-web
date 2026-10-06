@@ -536,11 +536,7 @@ export function AppShell() {
     if (tab?.dirty && !window.confirm(`Discard unsaved changes to "${tab.label}"?`)) {
       return;
     }
-    setFileTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0) setRightPanelOpen(false);
-      return next;
-    });
+    setFileTabs((prev) => prev.filter((t) => t.id !== tabId));
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
@@ -549,7 +545,12 @@ export function AppShell() {
   }, [fileTabs]);
 
   const handleFileDirtyChange = useCallback((tabId: string, dirty: boolean) => {
-    setFileTabs((prev) => prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t)));
+    setFileTabs((prev) => {
+      // Bail with the SAME reference when nothing changes — a fresh array
+      // here would re-render forever against the effect that calls this.
+      if (!prev.some((t) => t.id === tabId && t.dirty !== dirty)) return prev;
+      return prev.map((t) => (t.id === tabId && t.dirty !== dirty ? { ...t, dirty } : t));
+    });
   }, []);
 
   const handleToggleFileIncluded = useCallback(() => {
@@ -1428,26 +1429,9 @@ export function AppShell() {
               activeTabId={activeFileTabId ?? ""}
               onSelectTab={setActiveFileTabId}
               onCloseTab={handleCloseFileTab}
+              onNewTab={handleNewFileTab}
             />
           </div>
-          <button
-            onClick={handleNewFileTab}
-            title="New tab (browse files)"
-            aria-label="New tab"
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 30, height: 30, margin: "0 4px", flexShrink: 0,
-              background: "none", border: "none", borderRadius: 6,
-              color: "var(--text-muted)", cursor: "pointer",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
         </div>
 
         {/* File content — every open tab stays mounted (visibility toggled via

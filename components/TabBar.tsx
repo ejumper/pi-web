@@ -22,9 +22,11 @@ interface Props {
   activeTabId: string;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
+  /** Renders the "+" button right of the last tab. */
+  onNewTab?: () => void;
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onNewTab }: Props) {
   const [hoveredClose, setHoveredClose] = useState<string | null>(null);
 
   return (
@@ -111,6 +113,28 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
           </div>
         );
       })}
+      {/* New tab — sits immediately right of the last tab (browser-style) */}
+      {onNewTab && (
+        <button
+          onClick={onNewTab}
+          title="New tab (browse files)"
+          aria-label="New tab"
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            height: 36, width: 38,
+            background: "none", border: "none", borderRight: "1px solid var(--border)",
+            color: "var(--text-muted)", cursor: "pointer", flexShrink: 0,
+            transition: "background 0.1s, color 0.1s",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
