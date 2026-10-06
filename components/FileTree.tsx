@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Tree, type TreeApi } from "react-arborist";
 import { getFileIcon } from "./FileIcons";
+import { BookmarkMenu, ConfirmDialog, addBookmark } from "./BookmarkMenu";
 
 interface FileTreeNode {
   /** absolute path — doubles as the node id */
@@ -113,6 +114,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
   const [renameId, setRenameId] = useState<string | null>(null);
   const [creating, setCreating] = useState<{ parentId: string | null; isDir: boolean } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; node: { id: string; name: string; isDir: boolean } } | null>(null);
+  const [confirmState, setConfirmState] = useState<{ message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
   const clip = useClipboard();
   const treeRef = useRef<TreeApi<FileTreeNode> | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -238,9 +240,16 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
 
   /* -------- create (inline name input) -------- */
 
-  const startCreate = (isDir: boolean) => {
-    const sel = selectedId ? findNode(nodes, selectedId) : null;
-    const parentId = sel ? (sel.isDir ? sel.id : parentOf(sel.id)) : null;
+  const startCreate = (isDir: boolean, target?: { id: string; isDir: boolean } | null) => {
+    // Context-menu target wins (dir -> inside it, file -> its parent);
+    // otherwise the selected row, else the root.
+    let parentId: string | null;
+    if (target) {
+      parentId = target.isDir ? target.id : parentOf(target.id);
+    } else {
+      const sel = selectedId ? findNode(nodes, selectedId) : null;
+      parentId = sel ? (sel.isDir ? sel.id : parentOf(sel.id)) : null;
+    }
     // Make sure the target dir is loaded + open so the input row is visible.
     void (async () => {
       let base = nodes;
@@ -299,16 +308,23 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
 
   /* -------- delete / copy / paste -------- */
 
-  const doDelete = async (node: { id: string; name: string; isDir: boolean }) => {
-    if (!window.confirm(`Delete "${node.name}"${node.isDir ? " and everything inside it" : ""}?`)) return;
-    const res = await ops({ action: "delete", path: node.id });
-    if (!res.ok) {
-      setError((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
-      return;
-    }
-    setError(null);
-    if (selectedId === node.id || selectedId?.startsWith(`${node.id}/`)) setSelectedId(null);
-    await refreshDir(parentOf(node.id));
+  const doDelete = (node: { id: string; name: string; isDir: boolean }) => {
+    // Custom confirm — window.confirm is SILENTLY IGNORED in iOS standalone
+    // PWAs (returns falsy with no dialog), which made delete a no-op there.
+    setConfirmState({
+      message: `Delete "${node.name}"${node.isDir ? " and everything inside it" : ""}?`,
+      confirmLabel: "Delete",
+      onConfirm: () => void (async () => {
+        const res = await ops({ action: "delete", path: node.id });
+        if (!res.ok) {
+          setError((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+          return;
+        }
+        setError(null);
+        if (selectedId === node.id || selectedId?.startsWith(`${node.id}/`)) setSelectedId(null);
+        await refreshDir(parentOf(node.id));
+      })(),
+    });
   };
 
   const doPaste = async (targetRow: { id: string; isDir: boolean }) => {
@@ -376,6 +392,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
           </svg>
         ))}
+        <BookmarkMenu onFocusDir={(dir) => void reveal(nodes, root, dir)} />
       </div>
 
       {error && (
@@ -484,7 +501,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
           style={{
             position: "fixed",
             left: Math.min(menu.x, window.innerWidth - 170),
-            top: Math.min(menu.y, window.innerHeight - 150),
+            top: Math.min(menu.y, window.innerHeight - 260),
             zIndex: 200,
             minWidth: 160,
             background: "var(--bg)",
@@ -497,6 +514,16 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
           onPointerDown={(e) => e.stopPropagation()}
         >
           {([
+            {
+              label: "New file",
+              disabled: false,
+              run: () => startCreate(false, menu.node),
+            },
+            {
+              label: "New folder",
+              disabled: false,
+              run: () => startCreate(true, menu.node),
+            },
             {
               label: "Copy",
               disabled: false,
@@ -513,10 +540,18 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
               run: () => startRename(menu.node),
             },
             {
+              label: "Bookmark",
+              disabled: false,
+              run: () => {
+                const dir = menu.node.isDir ? menu.node.id : parentOf(menu.node.id);
+                addBookmark({ path: dir, name: nameOf(dir) });
+              },
+            },
+            {
               label: "Delete",
               disabled: false,
               danger: true,
-              run: () => void doDelete(menu.node),
+              run: () => doDelete(menu.node),
             },
           ]).map((item) => (
             <button
@@ -537,6 +572,20 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
             </button>
           ))}
         </div>
+      )}
+
+      {/* Delete confirmation */}
+      {confirmState && (
+        <ConfirmDialog
+          message={confirmState.message}
+          confirmLabel={confirmState.confirmLabel}
+          onCancel={() => setConfirmState(null)}
+          onConfirm={() => {
+            const run = confirmState.onConfirm;
+            setConfirmState(null);
+            run();
+          }}
+        />
       )}
     </div>
   );
