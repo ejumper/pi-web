@@ -10,6 +10,7 @@ import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
+import { FileTree } from "./FileTree";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -448,6 +449,32 @@ export function AppShell() {
     handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
   }, [handleOpenFile, selectedSession?.id]);
 
+  // "+" in the file tab bar — a blank tab that shows the file browser
+  // (replaces the old sidebar Files section).
+  const handleNewFileTab = useCallback(() => {
+    const tabId = `browse:${Date.now()}`;
+    setFileTabs((prev) => [...prev, { id: tabId, label: "Browse", filePath: "", explorer: true }]);
+    setActiveFileTabId(tabId);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  // Opening a file FROM a browser tab replaces that tab's content (the tab
+  // is a scratch "Browse" slot, so no edit state is lost). If the file is
+  // already open elsewhere, that tab is activated instead — keeping its
+  // unsaved edits.
+  const handleOpenFileIntoTab = useCallback((tabId: string, filePath: string) => {
+    const targetId = `file:${filePath}`;
+    setFileTabs((prev) => {
+      const existing = prev.find((t) => t.id === targetId);
+      const rest = prev.filter((t) => t.id !== tabId && t.id !== targetId);
+      return existing
+        ? [...rest, existing]
+        : [...rest, { id: targetId, label: getFileName(filePath), filePath, sourceSessionId: selectedSession?.id ?? null, included: true }];
+    });
+    setActiveFileTabId(targetId);
+  }, [selectedSession?.id]);
+
   // Notepad dropdown — opens the tmp/quick notepads in the editor without
   // touching the session cwd or the explorer's shown directory (the whole
   // point). The endpoint creates the file on demand and allow-lists it.
@@ -532,7 +559,7 @@ export function AppShell() {
   // regardless of whether the right file panel itself is open.
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const activeFileIncluded = activeFileTab?.included ?? true;
-  const pendingFileMention = (activeFileTab && activeFileIncluded)
+  const pendingFileMention = (activeFileTab && activeFileTab.filePath && activeFileIncluded)
     ? buildAtMentionText(getRelativeFilePath(activeFileTab.filePath, activeCwd ?? undefined), false)
     : null;
 
@@ -1327,7 +1354,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
-              hasOpenFile={!!activeFileTab}
+              hasOpenFile={!!(activeFileTab && activeFileTab.filePath)}
               fileIncluded={activeFileIncluded}
               onToggleFileIncluded={handleToggleFileIncluded}
               pendingFileMention={pendingFileMention}
@@ -1388,7 +1415,24 @@ export function AppShell() {
               onCloseTab={handleCloseFileTab}
             />
           </div>
-
+          <button
+            onClick={handleNewFileTab}
+            title="New tab (browse files)"
+            aria-label="New tab"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 30, height: 30, margin: "0 4px", flexShrink: 0,
+              background: "none", border: "none", borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
         </div>
 
         {/* File content — every open tab stays mounted (visibility toggled via
@@ -1404,6 +1448,9 @@ export function AppShell() {
                 height: "100%",
               }}
             >
+              {tab.explorer ? (
+                <FileTree onOpenFile={(p) => handleOpenFileIntoTab(tab.id, p)} />
+              ) : (
               <FileViewer
                 filePath={tab.filePath}
                 cwd={activeCwd ?? undefined}
@@ -1416,12 +1463,11 @@ export function AppShell() {
                 onDirtyChange={(dirty) => handleFileDirtyChange(tab.id, dirty)}
                 onEditorViewChange={(view) => handleEditorViewChange(tab.id, view)}
               />
+              )}
             </div>
           ))}
           {fileTabs.length === 0 && (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
-              No file open
-            </div>
+            <FileTree onOpenFile={(p) => handleOpenFile(p, getFileName(p), selectedSession?.id ?? null)} />
           )}
         </div>
       </div>

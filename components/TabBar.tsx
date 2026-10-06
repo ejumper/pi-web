@@ -9,6 +9,8 @@ export interface Tab {
   filePath: string;
   sourceSessionId?: string | null;
   dirty?: boolean;
+  /** A blank tab showing the file browser instead of a file. */
+  explorer?: boolean;
   /** Whether this file is auto-@mentioned with the next chat prompt. Default: true. */
   included?: boolean;
 }
