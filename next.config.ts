@@ -14,6 +14,10 @@ try {
 const publicHostname = process.env.PI_WEB_PUBLIC_URL ? new URL(process.env.PI_WEB_PUBLIC_URL).host : undefined;
 
 const nextConfig: NextConfig = {
+  // dev server writes to its own dist dir (PI_WEB_DEV_DIST=.next-dev) so
+  // `next dev` iteration can run alongside the production `next start`
+  // without clobbering .next
+  distDir: process.env.PI_WEB_DEV_DIST || ".next",
   serverExternalPackages: [
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-ai",
