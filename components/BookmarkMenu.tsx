@@ -7,18 +7,22 @@ import { ConfirmDialog } from "./ConfirmDialog";
 interface Props {
   /** Reveal + select a directory in the file tree. */
   onFocusDir: (dir: string) => void;
+  /** Open a bookmarked file directly in the editor. */
+  onOpenFile: (filePath: string) => void;
 }
 
 const ROW_H = 30;
 
 /**
- * Bookmarks dropdown for the file browser toolbar: bookmarked directories
- * in insertion order, drag to reorder (pointer-based, works with touch),
- * "x" removes after a confirmation dialog. Selecting an entry focuses the
- * directory in the tree. State persists in localStorage
- * (pi-web:file-bookmarks) and is shared across Browse tabs.
+ * Bookmarks dropdown for the file browser toolbar: bookmarked directories and
+ * files in insertion order, drag to reorder (pointer-based, works with touch),
+ * "x" removes after a confirmation dialog. Selecting a dir focuses it in the
+ * tree; selecting a file opens it directly in the editor (rendered italic to
+ * distinguish from dirs). A pinned scratchpad entry (/tmp/scratchpad.md,
+ * bold-italic, wiped on reboot) always sits at the top. State persists in
+ * localStorage (pi-web:file-bookmarks) and is shared across Browse tabs.
  */
-export function BookmarkMenu({ onFocusDir }: Props) {
+export function BookmarkMenu({ onFocusDir, onOpenFile }: Props) {
   const bookmarks = useFileBookmarks();
   const [open, setOpen] = useState(false);
   const [confirmPath, setConfirmPath] = useState<string | null>(null);
@@ -42,6 +46,23 @@ export function BookmarkMenu({ onFocusDir }: Props) {
 
   const confirmTarget = confirmPath ? bookmarks.find((b) => b.path === confirmPath) ?? null : null;
 
+  // Scratchpad: ensure it exists (the endpoint creates it and allow-lists
+  // /tmp), then open it straight in the editor.
+  const openScratchpad = async () => {
+    setOpen(false);
+    try {
+      const res = await fetch("/api/notepad/open", { method: "POST" });
+      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
+      if (!res.ok || !data.path) {
+        console.error("Scratchpad open failed:", data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      onOpenFile(data.path);
+    } catch (err) {
+      console.error("Scratchpad open failed:", err);
+    }
+  };
+
   return (
     <div ref={wrapRef} style={{ position: "relative", flexShrink: 0 }}>
       <button
@@ -51,7 +72,7 @@ export function BookmarkMenu({ onFocusDir }: Props) {
         aria-expanded={open}
         style={{
           display: "flex", alignItems: "center", justifyContent: "center",
-          width: 24, height: 24, padding: 0,
+          width: 30, height: 30, padding: 0,
           background: open ? "var(--bg-selected)" : "none",
           border: "none", borderRadius: 5,
           color: open ? "var(--text)" : "var(--text-dim)",
@@ -60,7 +81,7 @@ export function BookmarkMenu({ onFocusDir }: Props) {
         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = open ? "var(--bg-selected)" : "none"; e.currentTarget.style.color = open ? "var(--text)" : "var(--text-dim)"; }}
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
         </svg>
       </button>
@@ -74,9 +95,26 @@ export function BookmarkMenu({ onFocusDir }: Props) {
         }}>
           {bookmarks.length === 0 && (
             <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--text-dim)" }}>
-              No bookmarks yet — right-click a folder to add one.
+              No bookmarks yet — right-click a file or folder to add one.
             </div>
           )}
+          {/* Pinned scratchpad entry — bold-italic, not draggable/removable */}
+          <div
+            onClick={() => { void openScratchpad(); }}
+            title="/tmp/scratchpad.md — ephemeral notepad, wiped on reboot"
+            style={{
+              display: "flex", alignItems: "center",
+              height: ROW_H - 4, padding: "0 8px",
+              borderRadius: 5, cursor: "pointer", fontSize: 12.5,
+              color: "var(--text)", fontWeight: 700, fontStyle: "italic",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+          >
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              scratchpad.md
+            </span>
+          </div>
           {bookmarks.map((b: Bookmark, i: number) => (
             <div
               key={b.path}
@@ -113,14 +151,15 @@ export function BookmarkMenu({ onFocusDir }: Props) {
                 dragRef.current = null;
                 if (d && !d.moved) {
                   setOpen(false);
-                  onFocusDir(b.path);
+                  if (b.kind === "file") onOpenFile(b.path);
+                  else onFocusDir(b.path);
                 }
               }}
               onPointerCancel={() => { dragRef.current = null; }}
               onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
             >
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", pointerEvents: "none" }}>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", pointerEvents: "none", fontStyle: b.kind === "file" ? "italic" : undefined }}>
                 {b.name}
               </span>
               <button

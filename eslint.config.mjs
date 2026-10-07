@@ -5,6 +5,11 @@ const eslintConfig = [
   ...coreWebVitals,
   ...typescript,
   {
+    // .next is ignored by the next config implicitly; .next-dev (the parallel
+    // dist dir `next dev` writes to when running beside `next start`) is not.
+    ignores: [".next-dev/**"],
+  },
+  {
     rules: {
       "react-hooks/immutability": "off",
       "react-hooks/refs": "off",

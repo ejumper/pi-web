@@ -3,9 +3,11 @@
 import { useSyncExternalStore } from "react";
 
 export interface Bookmark {
-  /** absolute directory path */
+  /** absolute path (directory or file) */
   path: string;
   name: string;
+  /** "dir" focuses the tree; "file" opens in the editor. Legacy stored entries load as dirs. */
+  kind: "dir" | "file";
 }
 
 const KEY = "pi-web:file-bookmarks";
@@ -18,7 +20,11 @@ function load(): Bookmark[] {
   try {
     const raw = window.localStorage.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Bookmark[]) : [];
-    return Array.isArray(parsed) ? parsed.filter((b) => b && typeof b.path === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((b) => b && typeof b.path === "string")
+          .map((b) => ({ ...b, kind: b.kind === "file" ? "file" : "dir" }))
+      : [];
   } catch {
     return [];
   }

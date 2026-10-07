@@ -81,8 +81,8 @@ function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceS
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        height: 20,
-        padding: "0 5px",
+        height: 25,
+        padding: "0 6px",
         background: "var(--bg-panel)",
         border: "1px solid var(--border)",
         borderRadius: 4,
@@ -92,7 +92,7 @@ function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceS
         textDecoration: "none",
       }}
     >
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
         <polyline points="7 10 12 15 17 10" />
         <line x1="12" y1="15" x2="12" y2="3" />
@@ -389,7 +389,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "4px 16px",
+          padding: "5px 16px",
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -522,7 +522,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "4px 16px",
+          padding: "5px 16px",
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -656,7 +656,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "4px 16px",
+          padding: "5px 16px",
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -1084,14 +1084,16 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
   );
 
   // Two-finger gestures on the editor (a phone has no keyboard shortcuts),
-  // Procreate-style: tap = undo, double-tap = redo, swipe up = save (save
-  // moved off the tap so tap/double-tap could become undo/redo). The wrapper
+  // Procreate-style: tap = undo, double-tap = redo, hold = save. Save lives
+  // on the two-finger layer because a single-finger long-press trips iOS's
+  // text-selection loupe (OS-driven, unsuppressable while text stays
+  // selectable); two fingers never start a selection. The wrapper
   // below only renders in the editor branch, so the gestures are already
   // off in preview/diff modes.
   const twoFingerGesturesRef = useTwoFingerGestures({
     onTap: () => handleUndo(),
     onDoubleTap: () => handleRedo(),
-    onSwipeUp: () => {
+    onHold: () => {
       if (dirtyRef.current) handleSave();
     },
   });
@@ -1190,7 +1192,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "4px 16px",
+          padding: "5px 16px",
           borderBottom: "1px solid var(--border)",
           fontSize: 11,
           color: "var(--text-dim)",
@@ -1252,7 +1254,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           aria-label="Save"
           style={{
             display: "flex", alignItems: "center", justifyContent: "center",
-            height: 20, width: 22, padding: 0,
+            height: 25, width: 28, padding: 0,
             background: "var(--bg-hover)",
             color: dirty ? "var(--text)" : "var(--text-dim)",
             border: "1px solid var(--border)", borderRadius: 5,
@@ -1261,11 +1263,11 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
           }}
         >
           {saveState === "saving" ? (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite" }} aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-5.7-8.4" />
             </svg>
           ) : (
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
               <polyline points="17 21 17 13 7 13 7 21" />
               <polyline points="7 3 7 8 15 8" />
@@ -1288,14 +1290,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               aria-label="Undo"
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
-                height: 20, width: 20, padding: 0,
+                height: 25, width: 25, padding: 0,
                 background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 4,
                 color: canUndo ? "var(--text-muted)" : "var(--text-dim)",
                 cursor: canUndo ? "pointer" : "default",
                 opacity: canUndo ? 1 : 0.5,
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="9 14 4 9 9 4" />
                 <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
               </svg>
@@ -1307,14 +1309,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
               aria-label="Redo"
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
-                height: 20, width: 20, padding: 0,
+                height: 25, width: 25, padding: 0,
                 background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 4,
                 color: canRedo ? "var(--text-muted)" : "var(--text-dim)",
                 cursor: canRedo ? "pointer" : "default",
                 opacity: canRedo ? 1 : 0.5,
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 14 20 9 15 4" />
                 <path d="M4 20v-7a4 4 0 0 1 4-4h12" />
               </svg>
@@ -1328,7 +1330,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             <button
               onClick={() => setViewMode("source")}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                padding: "2.5px 10px", fontSize: 11, border: "none", cursor: "pointer",
                 background: viewMode === "source" ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: viewMode === "source" ? "var(--text)" : "var(--text-muted)",
                 fontWeight: viewMode === "source" ? 600 : 400,
@@ -1339,7 +1341,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             <button
               onClick={() => setViewMode("diff")}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                padding: "2.5px 10px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
                 background: viewMode === "diff" ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: viewMode === "diff" ? "var(--text)" : "var(--text-muted)",
                 fontWeight: viewMode === "diff" ? 600 : 400,
@@ -1359,14 +1361,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             aria-pressed={spellcheckOn}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
-              height: 20, width: 22, padding: 0,
+              height: 25, width: 28, padding: 0,
               background: spellcheckOn ? "var(--bg-selected)" : "var(--bg-hover)",
               color: spellcheckOn ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
               flexShrink: 0,
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="m6 16 6-12 6 12" />
               <path d="M8 12h8" />
               <path d="m16 20 2 2 4-4" />
@@ -1380,7 +1382,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             <button
               onClick={() => setPreviewMode(false)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                padding: "2.5px 10px", fontSize: 11, border: "none", cursor: "pointer",
                 background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: !previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: !previewMode ? 600 : 400,
@@ -1391,7 +1393,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             <button
               onClick={() => setPreviewMode(true)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                padding: "2.5px 10px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
                 background: previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: previewMode ? 600 : 400,
@@ -1411,14 +1413,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onDirtyCha
             aria-pressed={!previewMode}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
-              height: 20, width: 22, padding: 0,
+              height: 25, width: 28, padding: 0,
               background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
               color: !previewMode ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
               flexShrink: 0,
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
             </svg>
           </button>

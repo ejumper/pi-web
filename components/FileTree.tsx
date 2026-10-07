@@ -29,7 +29,6 @@ interface Props {
 /* ------------------------- helpers ------------------------- */
 
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
-const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
 async function listDir(dirPath: string): Promise<FileTreeNode[]> {
   const res = await fetch(`/api/files/list?path=${encodeURIComponent(dirPath)}`);
@@ -366,7 +365,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
       aria-label={title}
       style={{
         display: "flex", alignItems: "center", justifyContent: "center",
-        width: 24, height: 24, padding: 0,
+        width: 30, height: 30, padding: 0,
         background: active ? "var(--bg-selected)" : "none",
         border: "none", borderRadius: 5,
         color: active ? "var(--text)" : "var(--text-dim)",
@@ -382,38 +381,38 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       {/* Toolbar: root path + actions */}
-      <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "4px 8px 4px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "5px 8px 5px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={root}>
           {root ? `~${root.replace(/^\/home\/[^/]+/, "")}` : "\u200b"}
         </div>
         {tbButton(showHidden ? "Hide hidden files" : "Show hidden files", () => setShowHidden((v) => !v), showHidden ? (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
           </svg>
         ) : (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
             <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
             <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" />
           </svg>
         ), showHidden)}
         {tbButton("New file", () => startCreate(false), (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
           </svg>
         ))}
         {tbButton("New folder", () => startCreate(true), (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
         ))}
         {tbButton("Refresh", () => void refreshAll(), (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
           </svg>
         ))}
-        <BookmarkMenu onFocusDir={(dir) => void reveal(nodes, root, dir)} />
+        <BookmarkMenu onFocusDir={(dir) => void reveal(nodes, root, dir)} onOpenFile={onOpenFile} />
       </div>
 
       {error && (
@@ -574,8 +573,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
               label: "Bookmark",
               disabled: false,
               run: () => {
-                const dir = menu.node.isDir ? menu.node.id : parentOf(menu.node.id);
-                addBookmark({ path: dir, name: nameOf(dir) });
+                addBookmark({ path: menu.node.id, name: menu.node.name, kind: menu.node.isDir ? "dir" : "file" });
               },
             },
             {

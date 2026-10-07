@@ -19,7 +19,6 @@ import { BranchNavigator } from "./BranchNavigator";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
 import { getFileName, getRelativeFilePath } from "@/lib/file-paths";
-import type { NotepadKind } from "@/lib/notepad";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -535,46 +534,8 @@ export function AppShell() {
     setActiveFileTabId(targetId);
   }, [selectedSession?.id]);
 
-  // Notepad dropdown — opens the tmp/quick notepads in the editor without
-  // touching the session cwd or the explorer's shown directory (the whole
-  // point). The endpoint creates the file on demand and allow-lists it.
-  const [notepadMenuOpen, setNotepadMenuOpen] = useState(false);
-  const notepadWrapRef = useRef<HTMLDivElement>(null);
-
-  const openNotepad = useCallback(async (kind: NotepadKind) => {
-    try {
-      const res = await fetch("/api/notepad/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind }),
-      });
-      const data = await res.json().catch(() => ({})) as { path?: string; error?: string };
-      if (!res.ok || !data.path) {
-        console.error("Notepad open failed:", data.error ?? `HTTP ${res.status}`);
-        return;
-      }
-      handleOpenFile(data.path, kind === "tmpnote" ? "Tmpnote" : "Quicknote");
-    } catch (err) {
-      console.error("Notepad open failed:", err);
-    }
-  }, [handleOpenFile]);
-
-  // Close the notepad menu on outside click or Escape
-  useEffect(() => {
-    if (!notepadMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (notepadWrapRef.current && !notepadWrapRef.current.contains(event.target as Node)) {
-        setNotepadMenuOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setNotepadMenuOpen(false); };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [notepadMenuOpen]);
+  // The notepad dropdown was replaced by file bookmarks (BookmarkMenu in
+  // FileTree) — the scratchpad lives there as a pinned entry.
 
   const topBarNewSessionCwd = selectedSession?.cwd ?? activeCwd ?? newSessionCwd ?? null;
 
@@ -1018,65 +979,6 @@ export function AppShell() {
                 onToggle={() => toggleTopPanel("branches")}
                 hasSession
               />
-              <div ref={notepadWrapRef} style={{ position: "relative", height: "100%", display: "flex" }}>
-                <button
-                  onClick={() => setNotepadMenuOpen((v) => !v)}
-                  title="Notepad"
-                  aria-label="Notepad"
-                  aria-haspopup="menu"
-                  aria-expanded={notepadMenuOpen}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    height: "100%", width: 36, padding: 0,
-                    background: notepadMenuOpen ? "var(--bg-selected)" : "none",
-                    border: "none",
-                    borderTop: notepadMenuOpen ? "2px solid var(--accent)" : "2px solid transparent",
-                    borderRight: "1px solid var(--border)",
-                    color: notepadMenuOpen ? "var(--text)" : "var(--text-muted)",
-                    cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-                  onMouseLeave={(e) => { if (!notepadMenuOpen) e.currentTarget.style.color = "var(--text-muted)"; }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                    <line x1="8" y1="13" x2="16" y2="13" />
-                    <line x1="8" y1="17" x2="14" y2="17" />
-                  </svg>
-                </button>
-                {notepadMenuOpen && (
-                  <div
-                    role="menu"
-                    style={{
-                      position: "absolute", top: "100%", left: 0, zIndex: 600,
-                      minWidth: 130, padding: "4px 0",
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "0 0 6px 6px",
-                      boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                    }}
-                  >
-                    {(["tmpnote", "quicknote"] as const).map((kind) => (
-                      <button
-                        key={kind}
-                        role="menuitem"
-                        type="button"
-                        onClick={() => { setNotepadMenuOpen(false); void openNotepad(kind); }}
-                        style={{
-                          display: "block", width: "100%", textAlign: "left",
-                          padding: "7px 12px", background: "none", border: "none",
-                          color: "var(--text)", fontSize: 12, cursor: "pointer",
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                      >
-                        {kind === "tmpnote" ? "Tmpnote" : "Quicknote"}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
               <button
                 onClick={handleTopBarNewSession}
                 disabled={!topBarNewSessionCwd}
