@@ -5,7 +5,7 @@ import { join } from "path";
  * Absolute path to the deployment's default workspace.
  *
  * PI_WEB_DEFAULT_WORKSPACE is the workspace subdirectory under JUMPERPEDIA_HOME
- * (e.g. "Quicknotes/sonar"). Both fall back to the plain Quicknotes dir so an
+ * (e.g. "Quicknotes/Sonar"). Both fall back to the plain Quicknotes dir so an
  * unconfigured deployment behaves as it did before these vars existed.
  *
  * Kept in one place so /api/home, /api/default-cwd and the sidebar's pinned
