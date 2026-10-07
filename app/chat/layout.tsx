@@ -6,8 +6,8 @@ export const metadata: Metadata = {
   // /chat keeps its own favicon + home-screen icon + manifest (pi-sonar-chat)
   // so it is visually distinct from pi-web in tabs and on home screens.
   icons: {
-    icon: [{ url: "/chat/icon.png", type: "image/png", sizes: "278x277" }],
-    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "278x277" }],
+    icon: [{ url: "/chat/icon.png", type: "image/png", sizes: "278x278" }],
+    apple: [{ url: "/chat/apple-icon.png", type: "image/png", sizes: "278x278" }],
   },
   manifest: "/branding/chat-manifest.webmanifest",
   appleWebApp: { capable: true, title: "Pi Voice Chat", statusBarStyle: "black-translucent" },

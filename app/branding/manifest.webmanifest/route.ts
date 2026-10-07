@@ -22,7 +22,7 @@ export async function GET() {
       background_color: "#000000",
       theme_color: "#000000",
       icons: [
-        { src: "/branding/icon.png", sizes: "278x277", type: "image/png", purpose: "any" },
+        { src: "/branding/icon.png", sizes: "278x278", type: "image/png", purpose: "any" },
       ],
     }),
     {

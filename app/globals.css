@@ -734,6 +734,9 @@ html.dark {
     bottom: 0;
     left: auto;
     min-width: 0;
+    /* Out-of-flow overlay: the shell's padding-top doesn't reach it. env() is
+       0 in desktop browsers; matters only for iPad-class standalone installs. */
+    padding-top: env(safe-area-inset-top, 0px);
     z-index: 250;
   }
   .right-panel-container.right-panel-full {
@@ -784,6 +787,10 @@ html.dark {
     top: 0;
     left: 0;
     bottom: 0;
+    /* iOS standalone draws under the status bar/Dynamic Island (viewport-fit=cover
+       + black-translucent status bar); pad the drawer's content below it while the
+       panel background still fills the notch area. env() is 0 in browsers/desktop. */
+    padding-top: env(safe-area-inset-top, 0px);
     width: 280px;
     max-width: 85vw;
     transition: transform 0.25s ease, box-shadow 0.25s ease;
@@ -803,6 +810,8 @@ html.dark {
     top: 0;
     right: 0;
     bottom: 0;
+    /* Same standalone-inset story as the sidebar drawer above. */
+    padding-top: env(safe-area-inset-top, 0px);
     width: 100%;
     min-width: 0;
     transition: transform 0.25s ease;

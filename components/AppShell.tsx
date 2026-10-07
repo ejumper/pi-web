@@ -893,7 +893,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -1557,7 +1557,7 @@ export function AppShell() {
         aria-label={editorFullWidth ? "Return to split view" : "Expand editor to full width"}
         aria-pressed={editorFullWidth}
         style={{
-          position: "fixed", top: 0, right: 36, zIndex: 300,
+          position: "fixed", top: "env(safe-area-inset-top, 0px)", right: 36, zIndex: 300,
           display: "flex", alignItems: "center", justifyContent: "center",
           width: 36, height: 36, padding: 0,
           background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
@@ -1584,7 +1584,7 @@ export function AppShell() {
       title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
       aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}
       style={{
-        position: "fixed", top: 0, right: 0, zIndex: 300,
+        position: "fixed", top: "env(safe-area-inset-top, 0px)", right: 0, zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",
         width: 36, height: 36, padding: 0,
         background: "var(--bg-panel)", border: "none", borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)",

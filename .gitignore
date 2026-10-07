@@ -15,6 +15,9 @@
 
 # next.js
 /.next/
+# `next dev` dist dir (PI_WEB_DEV_DIST) — see next.config.ts
+# (comment lives on its own line: git has no inline comments in .gitignore)
+/.next-dev/
 /out/
 
 # production
