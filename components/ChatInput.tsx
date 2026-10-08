@@ -1165,10 +1165,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         background: "transparent",
         padding: "0 16px",
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
-        // Base 8px plus the iOS safe-area inset (rounded corners/home
-        // indicator) plus a little extra cushion so the bottom button row
-        // isn't right up against the curved edge in the installed PWA.
-        paddingBottom: "calc(8px + env(safe-area-inset-bottom, 0px) + 8px)",
+        // 8px base + 8px cushion. Deliberately NO env(safe-area-inset-bottom):
+        // the composer returns to the screen's bottom edge in the iOS PWA and
+        // the home indicator overlays it — decided in exchange for the vertical
+        // space the inset was eating (top inset is still honored above).
+        paddingBottom: 16,
       }}
     >
       {/* Hidden file input */}

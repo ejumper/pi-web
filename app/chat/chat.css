@@ -88,7 +88,9 @@
      indicator (viewport-fit=cover + black-translucent); env() is 0 everywhere
      else. Background still fills the full screen behind the insets. */
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Deliberately NO bottom inset: the bottom bar returns to the screen edge
+     and the iOS home indicator overlays it — keeps the record row from losing
+     vertical space to the inset. */
   display: grid;
   grid-template-rows: 10% 1fr 10%;
   background: #000;
