@@ -1196,10 +1196,10 @@ export default function ChatPage() {
         style={{ "--glow-color": glow.mode === "off" ? "transparent" : GLOW_COLORS[glow.color] } as CSSProperties}
       >
         <div className="glow-edge">
-          <div className="glow-layer glow-layer--wide" />
-          <div className="glow-layer glow-layer--core" />
+          <div className="glow-layer glow-layer--wide"><div className="glow-ring" /></div>
+          <div className="glow-layer glow-layer--core"><div className="glow-ring" /></div>
+          <div className="glow-layer glow-layer--rim"><div className="glow-ring" /></div>
         </div>
-        <div className="glow-arc" />
       </div>
 
       <audio ref={audioRef} style={{ display: "none" }} />

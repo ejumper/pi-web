@@ -290,10 +290,26 @@
 }
 
 /* ── Edge glow overlay ───────────────────────────────────────────────────
-   The look (example glow.jpg): a wide, soft, feathered halo hugging the
-   rounded screen edge — two stacked blurred border rings (wide halo + bright
-   core), not a thin stroke. The "connecting" state is a single soft segment
-   traveling around the border (conic-gradient ring), not a dashed line. */
+   A soft, light-like halo hugging the MIDDLE (response) box only — the
+   overlay is an absolutely-positioned grid child pinned to the middle row's
+   grid area, so the glow frames the response rather than the whole screen.
+
+   The falloff is built like a real light source instead of a flat gradient:
+   three stacked gradient rings — a thin bright rim right at the edge (the
+   hot filament), a bright core band, and a wide soft halo. Each ring carries
+   a diagonal linear gradient (warm → base → cool tints of the phase color,
+   mixed via color-mix) so the glow varies in color along its length.
+
+   Structure matters: the blur lives on .glow-layer (the wrapper) and the
+   ring mask on .glow-ring (the child). Filter-then-mask on one element would
+   clip the halo spill to the ring band — nested the other way, the mask
+   shapes a sharp ring and the wrapper's blur spills it freely.
+
+   Loading states (connecting / synthesizing) show the SAME glow band, masked
+   by a rotating conic gradient to one segment: soft-feathered at both its
+   front and back, full-strength at the edge. .glow-edge sits 56px past the
+   box on every side so the mask never clips the halo's spill.
+   --glow-color comes from page.tsx per phase. */
 
 @property --glow-angle {
   syntax: "<angle>";
@@ -302,46 +318,39 @@
 }
 
 .glow-overlay {
-  position: fixed;
+  /* abspos grid child with a definite position: the middle row's grid area
+     becomes its containing block, and abspos items never join auto-placement,
+     so the title/response/bar rows keep their 10%/1fr/10% layout */
+  grid-row: 2;
+  grid-column: 1;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 50;
-  /* square: the glow follows the viewport edges (the reference photo's
-     rounded screen corners were just the photo) */
   --glow-radius: 0px;
 }
 .glow-edge {
+  /* oversize box: the halo blur spills past the middle row, and the arc's
+     conic mask (mask-clip: border-box) would cut anything outside it */
   position: absolute;
-  inset: 0;
+  inset: -56px;
 }
 .glow-layer {
+  /* blur/opacity wrapper; --glow-w/--glow-blur/--glow-op set per layer */
+  position: absolute;
+  inset: 56px;
+  border-radius: var(--glow-radius);
+  filter: blur(var(--glow-blur, 2px));
+  opacity: var(--glow-op, 1);
+}
+.glow-ring {
+  /* gradient border ring: the content-box/xor mask erases the interior,
+     leaving the padding band as the ring */
   position: absolute;
   inset: 0;
   border-radius: var(--glow-radius);
-  border-style: solid;
-  border-color: var(--glow-color, transparent);
-}
-.glow-layer--wide {
-  border-width: 22px;
-  filter: blur(18px);
-  opacity: 0.8;
-}
-.glow-layer--core {
-  border-width: 5px;
-  filter: blur(2px) drop-shadow(0 0 10px var(--glow-color, transparent));
-}
-.glow-arc {
-  position: absolute;
-  inset: 0;
-  border-radius: var(--glow-radius);
-  padding: 14px;
-  background: conic-gradient(
-    from var(--glow-angle),
-    transparent 0deg 262deg,
-    var(--glow-color) 338deg,
-    transparent 360deg
-  );
-  /* keep only the border ring of that gradient */
+  padding: var(--glow-w, 4px);
+  background: var(--glow-color, transparent);
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -350,42 +359,91 @@
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  filter: blur(6px) drop-shadow(0 0 14px var(--glow-color, transparent));
-  animation: glowSpin 1.3s linear infinite;
 }
 
-.glow--off .glow-edge,
-.glow--off .glow-arc {
+/* wide halo: long soft falloff, slight warm/cool drift along its length */
+.glow-layer--wide {
+  --glow-w: 24px;
+  --glow-blur: 20px;
+  --glow-op: 0.8;
+}
+.glow-layer--wide .glow-ring {
+  background: var(--glow-color, transparent);
+  background: linear-gradient(115deg,
+    color-mix(in oklab, var(--glow-color) 84%, #ffb36b) 0%,
+    color-mix(in oklab, var(--glow-color) 88%, #8f7bff) 55%,
+    color-mix(in oklab, var(--glow-color) 82%, #57c8ff) 100%);
+}
+/* core band: the bright body of the glow */
+.glow-layer--core {
+  --glow-w: 6px;
+  --glow-blur: 3px;
+}
+.glow-layer--core .glow-ring {
+  filter: drop-shadow(0 0 12px var(--glow-color, transparent));
+  background: var(--glow-color, transparent);
+  background: linear-gradient(115deg,
+    color-mix(in oklab, var(--glow-color) 82%, #ffb36b) 0%,
+    var(--glow-color) 36%,
+    color-mix(in oklab, var(--glow-color) 86%, #8f7bff) 70%,
+    color-mix(in oklab, var(--glow-color) 80%, #57c8ff) 100%);
+}
+/* rim: thin + bright right at the edge — a real light's hot filament */
+.glow-layer--rim {
+  --glow-w: 2px;
+  --glow-blur: 1px;
+  --glow-op: 0.95;
+}
+.glow-layer--rim .glow-ring {
+  background: var(--glow-color, transparent);
+  background: linear-gradient(115deg,
+    color-mix(in oklab, var(--glow-color) 52%, #ffffff) 0%,
+    color-mix(in oklab, var(--glow-color) 70%, #ffffff) 46%,
+    color-mix(in oklab, var(--glow-color) 56%, #ffffff) 100%);
+}
+
+.glow--off .glow-edge {
   opacity: 0;
 }
+/* loading: the normal glow band, masked to a rotating segment. The mask
+   alpha varies only with angle, so the perpendicular profile — bright rim at
+   the edge, soft falloff inward — stays untouched; only the segment's front
+   and back feather out. */
 .glow--arc .glow-edge {
-  opacity: 0;
-}
-.glow--arc .glow-arc {
   opacity: 1;
-}
-.glow--pulse .glow-arc {
-  opacity: 0;
+  -webkit-mask-image: conic-gradient(from var(--glow-angle),
+    transparent 0deg,
+    rgba(0, 0, 0, 0.12) 18deg,
+    rgba(0, 0, 0, 0.78) 40deg,
+    #000 56deg 76deg,
+    rgba(0, 0, 0, 0.78) 92deg,
+    rgba(0, 0, 0, 0.12) 114deg,
+    transparent 132deg,
+    transparent 360deg);
+  mask-image: conic-gradient(from var(--glow-angle),
+    transparent 0deg,
+    rgba(0, 0, 0, 0.12) 18deg,
+    rgba(0, 0, 0, 0.78) 40deg,
+    #000 56deg 76deg,
+    rgba(0, 0, 0, 0.78) 92deg,
+    rgba(0, 0, 0, 0.12) 114deg,
+    transparent 132deg,
+    transparent 360deg);
+  animation: glowSpin 1.3s linear infinite;
 }
 .glow--pulse .glow-edge {
   animation: glowPulse 1.5s ease-in-out infinite;
-}
-.glow--steady .glow-arc {
-  opacity: 0;
 }
 .glow--steady .glow-edge {
   opacity: 0.85;
 }
 /* amplitude-driven ("pulse lines up with speech"): the halo follows
    --glow-amp, updated per frame from the audio analyser in page.tsx */
-.glow--audio .glow-arc {
-  opacity: 0;
-}
 .glow--audio .glow-edge {
   opacity: calc(0.5 + 0.5 * var(--glow-amp, 0.4));
 }
 .glow--audio .glow-layer--core {
-  border-width: calc(5px + 3px * var(--glow-amp, 0.4));
+  --glow-w: calc(6px + 3px * var(--glow-amp, 0.4));
 }
 
 @keyframes glowPulse {
