@@ -854,7 +854,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)" }}>
+    <div className="app-shell-root" style={{ display: "flex", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}

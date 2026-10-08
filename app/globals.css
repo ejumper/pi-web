@@ -825,3 +825,46 @@ html.dark {
     border-left: none !important;
   }
 }
+
+/* app-shell root height lives here (not inline) so the installed-PWA
+   override below can win the cascade without !important */
+.app-shell-root {
+  height: 100dvh;
+}
+
+/* ── iOS 26 installed-PWA viewport bug ("chin gap") ─────────────────────
+   With viewport-fit=cover + black-translucent, standalone WebKit resolves
+   100%/100svh/100dvh (and innerHeight/clientHeight) short by the TOP
+   safe-area inset, and the missing band renders at the BOTTOM as a dead
+   strip painted by the canvas background (measured 59pt on a Dynamic
+   Island iPhone — exactly env(safe-area-inset-top); position:fixed
+   inset:0 overlays stop at the same line, i.e. the ICB itself is short).
+   100lvh is the only unit that reports the full screen there. Scoped to
+   installed/fullscreen display modes so Safari tabs keep the dynamic
+   viewport, and desktop/Android installs (no undercount) are unaffected
+   since lvh == the window height for them.
+
+   The mobile-scoped block also gives the fixed overlays an explicit
+   100lvh height: their top:0/bottom:0 anchors resolve against the short
+   ICB, and an over-constrained absolutely-positioned box ignores `bottom`
+   when height is set — which is exactly what we want here.
+
+   Refs: r/PWA "PWA on iOS... fighting the chin gap" (2026-04);
+   ggghhhjjj/csd-bg#12; openchamber#2287; joejohnston72-dev/arc#8. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html,
+  body {
+    height: 100lvh;
+  }
+  .app-shell-root {
+    height: 100lvh;
+  }
+}
+@media (display-mode: standalone) and (max-width: 640px),
+  (display-mode: fullscreen) and (max-width: 640px) {
+  .sidebar-overlay-backdrop,
+  .sidebar-container,
+  .right-panel-container {
+    height: 100lvh;
+  }
+}

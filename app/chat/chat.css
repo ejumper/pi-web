@@ -553,3 +553,13 @@
   padding: 0.45rem 0.9rem;
   cursor: pointer;
 }
+
+/* iOS 26 installed-PWA viewport bug: 100dvh resolves short by the top
+   safe-area inset in standalone, leaving a dead band at the bottom (see
+   the "chin gap" note in globals.css) — use the full-screen lvh there;
+   Safari tabs keep the dynamic viewport. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  .chat-root {
+    height: 100lvh;
+  }
+}
