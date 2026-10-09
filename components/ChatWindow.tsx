@@ -503,7 +503,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       )}
 
       {isEmptyNew ? (
-        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
+        /* Same pan-y as the transcript scroller below — an empty new session is
+           still a scroll container, so the same iOS pointercancel steal applies. */
+        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8 [touch-action:pan-y]">
           <div className="w-full max-w-[820px]">
             <NoticeShelf notices={notices} align="right" />
             {chatInputElement}
@@ -527,7 +529,15 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
             <NoticeShelf notices={notices} floating align="right" />
           </div>
         </div>
-        <div ref={attachScrollContainer} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
+        {/* touch-action:pan-y — iOS WebKit claims horizontal drags that start on a
+            scroll container for native scrolling and fires pointercancel, which
+            killed the edge-swipe drawer whenever the transcript sat under the
+            screen edges (i.e. whenever a session was open). pan-y restricts the
+            browser to vertical panning; horizontal pans stay with JS. Inner
+            horizontal scrollers (.markdown-table-wrap, .katex-display,
+            .mermaid-block) are unaffected — the touch-action walk stops at the
+            touched element's own nearest scroll container, i.e. themselves. */}
+        <div ref={attachScrollContainer} className="flex-1 overflow-y-auto pt-4 [scrollbar-width:none] [touch-action:pan-y]">
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div style={{ maxWidth: 820, margin: "0 auto" }}>
               <ExtensionStatusBar statuses={extensionStatuses} />
