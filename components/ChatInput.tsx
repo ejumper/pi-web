@@ -1174,8 +1174,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
         // 8px base + 8px cushion. Bottom clearance for the home indicator /
         // rounded corners is handled at the shell level (var(--safe-bottom)
-        // padding on .app-shell-root), not per-composer.
-        paddingBottom: 16,
+        // padding on .app-shell-root), not per-composer. While the on-screen
+        // keyboard is open the shell overrides both vars — the keyboard is
+        // the bottom edge then, and the send button should sit just above it.
+        paddingBottom: "var(--composer-pad-bottom, 16px)",
       }}
     >
       {/* Hidden file input */}

@@ -44,8 +44,28 @@ export function useVisualViewportShell(ref: React.RefObject<HTMLElement | null>)
 
     let raf = 0;
     let last = "";
+    let lastWidth = 0;
+    let maxHeight = 0;
     const apply = () => {
       raf = 0;
+      // Keyboard open? iOS shrinks the visual viewport below the (constant)
+      // layout height; Android resizes both, so also track the tallest
+      // viewport seen per orientation (a rotation re-baselines via width).
+      if (vv.width !== lastWidth) {
+        lastWidth = vv.width;
+        maxHeight = 0;
+      }
+      if (vv.height > maxHeight) maxHeight = vv.height;
+      const kbOpen = vv.height < window.innerHeight - 120 || maxHeight - vv.height > 120;
+      if (kbOpen) {
+        // The keyboard is the bottom edge now — drop the home-indicator
+        // clearance and keep the composer just above it.
+        el.style.setProperty("--safe-bottom", "0px");
+        el.style.setProperty("--composer-pad-bottom", "6px");
+      } else {
+        el.style.removeProperty("--safe-bottom");
+        el.style.removeProperty("--composer-pad-bottom");
+      }
       const key = `${vv.height}|${vv.offsetTop}`;
       if (key === last) return;
       last = key;
@@ -69,6 +89,8 @@ export function useVisualViewportShell(ref: React.RefObject<HTMLElement | null>)
       if (raf) cancelAnimationFrame(raf);
       el.style.height = "";
       el.style.transform = "";
+      el.style.removeProperty("--safe-bottom");
+      el.style.removeProperty("--composer-pad-bottom");
     };
   }, [ref]);
 }
