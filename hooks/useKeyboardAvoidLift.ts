@@ -36,11 +36,15 @@ export function useKeyboardAvoidLift(ref: React.RefObject<HTMLElement | null>, e
 
     let raf = 0;
     let applied = 0;
+    // Extra lift beyond the exact keyboard edge: the composer's bottom row
+    // (send button) was landing a few px into the keyboard's clipped top edge
+    // even with the math exact — enough cushion to always clear it.
+    const LIFT_CUSHION_PX = 12;
     const apply = () => {
       raf = 0;
       const base = el.getBoundingClientRect().bottom + applied;
       const hidden = base - (vv.offsetTop + vv.height);
-      const next = Math.max(0, hidden);
+      const next = hidden > 0 ? hidden + LIFT_CUSHION_PX : 0;
       // Deadband: sub-pixel drift must not rewrite the margin every frame.
       if (Math.abs(next - applied) < 0.5) return;
       applied = next;
@@ -53,11 +57,16 @@ export function useKeyboardAvoidLift(ref: React.RefObject<HTMLElement | null>, e
 
     vv.addEventListener("resize", onChange);
     vv.addEventListener("scroll", onChange);
+    // iOS keyboard pans do not reliably fire visualViewport events — the
+    // keyboard can settle with no final event and leave the lift slightly
+    // short. Poll as a fallback (the deadband keeps it a no-op when settled).
+    const poll = setInterval(apply, 250);
     apply();
 
     return () => {
       vv.removeEventListener("resize", onChange);
       vv.removeEventListener("scroll", onChange);
+      clearInterval(poll);
       if (raf) cancelAnimationFrame(raf);
       el.style.marginBottom = "";
     };

@@ -1840,20 +1840,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <button
                 onClick={onToggleFileIncluded}
                 title={fileIncluded
-                  ? "Open file is sent with chat prompts — click to exclude it for this session (until re-enabled)"
-                  : "Open file is excluded from chat prompts for this session — click to re-include it"}
-                aria-label={fileIncluded ? "Exclude open file from chat for this session" : "Include open file with chat prompts"}
+                  ? "Open file is sent with chat prompts — click to hide it for this session (until re-enabled)"
+                  : "Open file is hidden from chat prompts for this session — click to include it"}
+                aria-label={fileIncluded ? "Hide open file from chat for this session" : "Include open file with chat prompts"}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                  width: 32,
                   height: 32,
-                  padding: 0,
+                  padding: "0 10px",
                   background: "none",
                   border: "none",
                   borderRadius: 9,
                   color: fileIncluded ? "var(--accent)" : "var(--text-dim)",
                   cursor: "pointer",
                   opacity: fileIncluded ? 1 : 0.55,
+                  fontSize: 12,
+                  whiteSpace: "nowrap",
                   transition: "background 0.12s, color 0.12s, opacity 0.12s",
                 }}
                 onMouseEnter={(e) => {
@@ -1879,6 +1880,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <line x1="5" y1="21" x2="19" y2="3" />
                   </svg>
                 )}
+                {fileIncluded ? "included" : "hidden"}
               </button>
             )}
 

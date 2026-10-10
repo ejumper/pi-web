@@ -55,6 +55,7 @@ export function AppShell() {
   const sidebarContainerRef = useRef<HTMLDivElement>(null);
   const rightPanelContainerRef = useRef<HTMLDivElement>(null);
   const fileTabBarRef = useRef<HTMLDivElement>(null);
+  const filePanelToggleRef = useRef<HTMLButtonElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -634,9 +635,13 @@ export function AppShell() {
     rightPanelRef: rightPanelContainerRef,
   });
 
-  // Keeps the file tab bar visually pinned to the top of the screen when the
-  // on-screen keyboard opens — see hooks/useKeyboardAvoidPin.ts.
+  // Keeps the top bars visually pinned to the top of the screen when the
+  // on-screen keyboard opens — iOS's caret pan otherwise pushes them up into
+  // the status-bar overflow until something happens to reset the pan.
+  // See hooks/useKeyboardAvoidPin.ts.
   useKeyboardAvoidPin(fileTabBarRef, isMobile);
+  useKeyboardAvoidPin(topBarRef, isMobile);
+  useKeyboardAvoidPin(filePanelToggleRef, isMobile);
 
   const handleEditorViewChange = useCallback((tabId: string, view: EditorView | null) => {
     if (view) editorViewsRef.current.set(tabId, view);
@@ -1482,6 +1487,7 @@ export function AppShell() {
     )}
     {/* File panel toggle — always visible at top-right */}
     <button
+      ref={filePanelToggleRef}
       onClick={() => setRightPanelOpen((v) => !v)}
       title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
       aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}

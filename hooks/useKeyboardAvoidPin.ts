@@ -23,9 +23,13 @@ export function useKeyboardAvoidPin(ref: React.RefObject<HTMLElement | null>, en
     if (!el || !vv) return;
 
     let raf = 0;
+    let lastOffset = -1;
     const apply = () => {
       raf = 0;
-      el.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+      const offset = vv.offsetTop;
+      if (offset === lastOffset) return;
+      lastOffset = offset;
+      el.style.transform = offset ? `translateY(${offset}px)` : "";
     };
     const onChange = () => {
       if (raf) return;
@@ -34,11 +38,17 @@ export function useKeyboardAvoidPin(ref: React.RefObject<HTMLElement | null>, en
 
     vv.addEventListener("resize", onChange);
     vv.addEventListener("scroll", onChange);
+    // iOS keyboard pans do not reliably fire visualViewport scroll events —
+    // the pan can settle with no event at all and strand the element off the
+    // top until the user happens to scroll. Poll as a fallback (cheap: apply
+    // is idempotent and only rewrites on an offset change).
+    const poll = setInterval(apply, 250);
     apply();
 
     return () => {
       vv.removeEventListener("resize", onChange);
       vv.removeEventListener("scroll", onChange);
+      clearInterval(poll);
       if (raf) cancelAnimationFrame(raf);
       el.style.transform = "";
     };
