@@ -5,7 +5,7 @@ import type { EditorView } from "@codemirror/view";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
-import { useKeyboardAvoidPin } from "@/hooks/useKeyboardAvoidPin";
+import { useVisualViewportShell } from "@/hooks/useVisualViewportShell";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
@@ -55,7 +55,7 @@ export function AppShell() {
   const sidebarContainerRef = useRef<HTMLDivElement>(null);
   const rightPanelContainerRef = useRef<HTMLDivElement>(null);
   const fileTabBarRef = useRef<HTMLDivElement>(null);
-  const filePanelToggleRef = useRef<HTMLButtonElement>(null);
+  const shellRootRef = useRef<HTMLDivElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -635,13 +635,11 @@ export function AppShell() {
     rightPanelRef: rightPanelContainerRef,
   });
 
-  // Keeps the top bars visually pinned to the top of the screen when the
-  // on-screen keyboard opens — iOS's caret pan otherwise pushes them up into
-  // the status-bar overflow until something happens to reset the pan.
-  // See hooks/useKeyboardAvoidPin.ts.
-  useKeyboardAvoidPin(fileTabBarRef, isMobile);
-  useKeyboardAvoidPin(topBarRef, isMobile);
-  useKeyboardAvoidPin(filePanelToggleRef, isMobile);
+  // Fits the whole shell to the visual viewport (the visible band above the
+  // on-screen keyboard, in the pan position iOS leaves it in) — keeps the top
+  // safe-area margin, top bars and content in place while typing.
+  // See hooks/useVisualViewportShell.ts.
+  useVisualViewportShell(shellRootRef);
 
   const handleEditorViewChange = useCallback((tabId: string, view: EditorView | null) => {
     if (view) editorViewsRef.current.set(tabId, view);
@@ -859,7 +857,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div className="app-shell-root" style={{ display: "flex", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "var(--safe-bottom)" }}>
+    <div ref={shellRootRef} className="app-shell-root" style={{ display: "flex", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "var(--safe-bottom)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -1487,7 +1485,6 @@ export function AppShell() {
     )}
     {/* File panel toggle — always visible at top-right */}
     <button
-      ref={filePanelToggleRef}
       onClick={() => setRightPanelOpen((v) => !v)}
       title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
       aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}

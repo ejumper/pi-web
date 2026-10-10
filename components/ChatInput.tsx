@@ -1756,9 +1756,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{currentName}</span>
                   </button>
                   {modelDropdownOpen && modelDropdownRect && (() => {
-                    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-                    const bottom = viewportHeight - modelDropdownRect.top + 6;
-                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - 8, viewportHeight * 0.6));
+                    // The panel is position:fixed inside the shell root, which
+                    // is always a containing block (see useVisualViewportShell)
+                    // — so measure against the shell box, not the raw viewport.
+                    const anchor = dropdownRef.current?.closest(".app-shell-root")?.getBoundingClientRect();
+                    const anchorTop = anchor?.top ?? 0;
+                    const anchorBottom = anchor?.bottom ?? (window.visualViewport?.height ?? window.innerHeight);
+                    const bottom = anchorBottom - modelDropdownRect.top + 6;
+                    const maxH = Math.max(120, Math.min(modelDropdownRect.top - anchorTop - 8, (anchorBottom - anchorTop) * 0.6));
                     // On mobile, pin to a small left margin and cap width to the
                     // viewport so long model names never push the panel off-screen.
                     const panelPos: React.CSSProperties = isMobile
