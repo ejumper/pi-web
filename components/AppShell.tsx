@@ -217,7 +217,7 @@ export function AppShell() {
           label: getFileName(t.filePath),
           filePath: t.filePath,
           sourceSessionId: t.sourceSessionId ?? null,
-          included: true,
+          included: false,
         }));
       if (restored.length > 0) {
         setFileTabs(restored);
@@ -489,7 +489,7 @@ export function AppShell() {
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => {
       const existing = prev.find((t) => t.id === tabId);
-      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId, included: true }];
+      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId, included: false }];
       if (!sourceSessionId || existing.sourceSessionId === sourceSessionId) return prev;
       return prev.map((t) => t.id === tabId ? { ...t, sourceSessionId } : t);
     });
@@ -529,7 +529,7 @@ export function AppShell() {
       const rest = prev.filter((t) => t.id !== tabId && t.id !== targetId);
       return existing
         ? [...rest, existing]
-        : [...rest, { id: targetId, label: getFileName(filePath), filePath, sourceSessionId: selectedSession?.id ?? null, included: true }];
+        : [...rest, { id: targetId, label: getFileName(filePath), filePath, sourceSessionId: selectedSession?.id ?? null, included: false }];
     });
     setActiveFileTabId(targetId);
   }, [selectedSession?.id]);
@@ -584,7 +584,7 @@ export function AppShell() {
       const active = prev.find((t) => t.id === activeFileTabId && t.filePath);
       const target = active ?? [...prev].reverse().find((t) => !!t.filePath);
       if (!target) return prev;
-      return prev.map((t) => (t.id === target.id ? { ...t, included: !(t.included ?? true) } : t));
+      return prev.map((t) => (t.id === target.id ? { ...t, included: !(t.included ?? false) } : t));
     });
   }, [activeFileTabId]);
 
@@ -598,7 +598,7 @@ export function AppShell() {
   const effectiveFileTab = (activeFileTab && activeFileTab.filePath)
     ? activeFileTab
     : [...fileTabs].reverse().find((t) => !!t.filePath) ?? null;
-  const activeFileIncluded = effectiveFileTab?.included ?? true;
+  const activeFileIncluded = effectiveFileTab?.included ?? false;
   const pendingFileMention = (effectiveFileTab && activeFileIncluded)
     ? buildAtMentionText(getRelativeFilePath(effectiveFileTab.filePath, activeCwd ?? undefined), false)
     : null;
@@ -854,7 +854,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div className="app-shell-root" style={{ display: "flex", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)" }}>
+    <div className="app-shell-root" style={{ display: "flex", overflow: "hidden", background: "var(--bg)", paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "var(--safe-bottom)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}

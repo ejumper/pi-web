@@ -9,6 +9,7 @@ import {
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useKeyboardAvoidLift } from "@/hooks/useKeyboardAvoidLift";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -267,7 +268,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       liveRemoteState, onGuardChange, onReadModeChange,
       thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
       toolPreset, onToolPresetChange,
-      hasOpenFile, fileIncluded, onToggleFileIncluded,
+      onCompact, onAbortCompaction, isCompacting, compactError,
       soundEnabled, onSoundToggle,
     });
   }, [
@@ -275,7 +276,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     liveRemoteState, onGuardChange, onReadModeChange,
     thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
     toolPreset, onToolPresetChange,
-    hasOpenFile, fileIncluded, onToggleFileIncluded,
+    onCompact, onAbortCompaction, isCompacting, compactError,
     soundEnabled, onSoundToggle,
   ]);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>(() => (
@@ -1156,19 +1157,24 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
+  // Keep the composer (input + bottom row with send) visible above the iOS
+  // on-screen keyboard — the layout viewport never shrinks for it there.
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  useKeyboardAvoidLift(composerRef, isMobile);
+
 
 
   return (
     <div
+      ref={composerRef}
       style={{
         flexShrink: 0,
         background: "transparent",
         padding: "0 16px",
         paddingRight: isMobile ? 16 : 52, // desktop: 16px base + 36px for ChatMinimap alignment
-        // 8px base + 8px cushion. Deliberately NO env(safe-area-inset-bottom):
-        // the composer returns to the screen's bottom edge in the iOS PWA and
-        // the home indicator overlays it — decided in exchange for the vertical
-        // space the inset was eating (top inset is still honored above).
+        // 8px base + 8px cushion. Bottom clearance for the home indicator /
+        // rounded corners is handled at the shell level (var(--safe-bottom)
+        // padding on .app-shell-root), not per-composer.
         paddingBottom: 16,
       }}
     >
@@ -1817,9 +1823,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           {/* spacer */}
           {!isMobile && <div style={{ flex: 1 }} />}
 
-          {/* RIGHT: compact (idle) | stop (streaming). The rest of the old
-              control row (guard, read/write, reasoning, tools, open-file,
-              sound) moved to the sidebar's Controls section. */}
+          {/* RIGHT: open-file inclusion | stop (streaming). Swapped with the
+              Compact button (now in the sidebar's Controls section) — the
+              file toggle is used often enough to deserve the prompt-row slot,
+              and Compact was easy to fat-thumb next to send. */}
           <div style={{
             flex: "0 0 auto",
             display: "flex",
@@ -1829,57 +1836,50 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             marginLeft: isMobile ? 0 : "auto",
             gap: 2,
           }}>
-            {!isStreaming && onCompact && (
-              <div style={{ position: "relative" }}>
-                {compactError && (
-                  <div style={{
-                    position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                    background: "#1f2937", color: "#f87171",
-                    fontSize: 11, padding: "4px 8px", borderRadius: 5,
-                    whiteSpace: "nowrap", pointerEvents: "none",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 50,
-                  }}>
-                    {compactError}
-                  </div>
+            {hasOpenFile && onToggleFileIncluded && (
+              <button
+                onClick={onToggleFileIncluded}
+                title={fileIncluded
+                  ? "Open file is sent with chat prompts — click to exclude it for this session (until re-enabled)"
+                  : "Open file is excluded from chat prompts for this session — click to re-include it"}
+                aria-label={fileIncluded ? "Exclude open file from chat for this session" : "Include open file with chat prompts"}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: fileIncluded ? "var(--accent)" : "var(--text-dim)",
+                  cursor: "pointer",
+                  opacity: fileIncluded ? 1 : 0.55,
+                  transition: "background 0.12s, color 0.12s, opacity 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
+                  e.currentTarget.style.opacity = "1";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = fileIncluded ? "var(--accent)" : "var(--text-dim)";
+                  e.currentTarget.style.opacity = fileIncluded ? "1" : "0.55";
+                }}
+              >
+                {fileIncluded ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="5" y1="21" x2="19" y2="3" />
+                  </svg>
                 )}
-                <button
-                  onClick={isCompacting ? onAbortCompaction : onCompact}
-                  disabled={isStreaming && !isCompacting}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                    padding: isMobile ? "0 6px" : "8px 12px",
-                    width: isMobile ? "auto" : undefined,
-                    height: 32,
-                    background: isCompacting ? "rgba(239,68,68,0.08)" : "none",
-                    border: "none",
-                    borderRadius: 9,
-                    color: isCompacting ? "#ef4444" : "var(--text-muted)",
-                    cursor: (isStreaming && !isCompacting) ? "not-allowed" : "pointer",
-                    fontSize: 12, opacity: (isStreaming && !isCompacting) ? 0.5 : 1,
-                    transition: "background 0.12s, color 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isStreaming && !isCompacting) return;
-                    e.currentTarget.style.background = isCompacting ? "rgba(239,68,68,0.16)" : "var(--bg-hover)";
-                    e.currentTarget.style.color = isCompacting ? "#ef4444" : "var(--text)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = isCompacting ? "rgba(239,68,68,0.08)" : "none";
-                    e.currentTarget.style.color = isCompacting ? "#ef4444" : "var(--text-muted)";
-                  }}
-                  title={isCompacting ? "Stop compaction" : "Compact context"}
-                  aria-label={isCompacting ? "Stop compaction" : "Compact context"}
-                >
-                  {isCompacting ? (
-                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg><span style={{ whiteSpace: "nowrap" }}>Compacting…</span></>
-                  ) : (
-                    <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
-                      <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                    </svg><span style={{ whiteSpace: "nowrap" }}>Compact</span></>
-                  )}
-                </button>
-              </div>
+              </button>
             )}
 
             {isStreaming && (

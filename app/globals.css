@@ -25,6 +25,13 @@
      real in-flow width. */
   --rp-split-w: max(42vw, 300px);
 
+  /* Bottom clearance so bottom-anchored UI clears the home indicator and the
+     screen's rounded corners. Bare env() resolves to 0 on desktop; the
+     mobile/installed override below adds a floor because
+     env(safe-area-inset-bottom) reports 0 in installed PWAs on some iOS
+     versions (there is no Safari toolbar to anchor the inset to). */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
   --bg: #ffffff;
   --bg-panel: #f5f5f5;
   --bg-hover: #eeeeee;
@@ -50,6 +57,12 @@
      makes it vanish. CM's own defaults are #cceeff44 / #99eeff33 for the same
      reason. These mix down to --bg-hover over --bg. */
   --active-line-bg: rgba(0, 0, 0, 0.07);
+}
+
+@media (max-width: 640px), (display-mode: standalone), (display-mode: fullscreen) {
+  :root {
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
+  }
 }
 
 html.dark {
@@ -737,6 +750,7 @@ html.dark {
     /* Out-of-flow overlay: the shell's padding-top doesn't reach it. env() is
        0 in desktop browsers; matters only for iPad-class standalone installs. */
     padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: var(--safe-bottom);
     z-index: 250;
   }
   .right-panel-container.right-panel-full {
@@ -791,6 +805,7 @@ html.dark {
        + black-translucent status bar); pad the drawer's content below it while the
        panel background still fills the notch area. env() is 0 in browsers/desktop. */
     padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: var(--safe-bottom);
     width: 280px;
     max-width: 85vw;
     transition: transform 0.25s ease, box-shadow 0.25s ease;
@@ -812,6 +827,7 @@ html.dark {
     bottom: 0;
     /* Same standalone-inset story as the sidebar drawer above. */
     padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: var(--safe-bottom);
     width: 100%;
     min-width: 0;
     transition: transform 0.25s ease;
@@ -824,6 +840,15 @@ html.dark {
     transform: translateX(100%);
     border-left: none !important;
   }
+}
+
+/* Full-screen modal overlays (Models / Skills / Plugins / Confirm dialogs).
+   The centered panel must sit inside the safe area — in the installed PWA the
+   overlay spans the whole screen including the status bar (black-translucent)
+   — and the panels below size themselves in % of this padded box. */
+.modal-overlay {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: var(--safe-bottom);
 }
 
 /* app-shell root height lives here (not inline) so the installed-PWA
@@ -857,6 +882,9 @@ html.dark {
     height: 100lvh;
   }
   .app-shell-root {
+    height: 100lvh;
+  }
+  .modal-overlay {
     height: 100lvh;
   }
 }

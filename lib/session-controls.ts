@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@/components/SessionControls";
 /**
  * Bridge between the prompt editor's prop tree and the sidebar's Controls
  * section. ChatInput already receives all session-level controls (guard,
- * read mode, reasoning, tools, open-file inclusion, sound) from ChatWindow,
+ * read mode, reasoning, tools, compaction, sound) from ChatWindow,
  * but the sidebar lives in a different subtree under AppShell — instead of
  * lifting that state through unrelated layers, ChatInput publishes it here
  * and SessionControls subscribes.
@@ -30,9 +30,10 @@ export interface SessionControlsState {
   thinkingLevelMap?: Record<string, string | null> | null;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
-  hasOpenFile?: boolean;
-  fileIncluded?: boolean;
-  onToggleFileIncluded?: () => void;
+  onCompact?: () => void;
+  onAbortCompaction?: () => void;
+  isCompacting?: boolean;
+  compactError?: string | null;
   soundEnabled?: boolean;
   onSoundToggle?: () => void;
 }
@@ -45,8 +46,8 @@ const VALUE_KEYS = [
   "availableThinkingLevels",
   "thinkingLevelMap",
   "toolPreset",
-  "hasOpenFile",
-  "fileIncluded",
+  "isCompacting",
+  "compactError",
   "soundEnabled",
 ] as const;
 

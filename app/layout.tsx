@@ -57,13 +57,16 @@ export default function RootLayout({
         {/* iOS WebKit "first tap fires no click" guard. Safari can get into a
             state where taps stop producing click events page-wide until
             reload — triggered by touchstart/touchmove listeners being added
-            and removed as the app runs. A single touchstart listener that is
-            registered before anything else and never removed keeps click
-            delivery healthy. It's passive and empty on purpose: it must exist,
-            not do anything. See docs/bug-list notes / SO 41972388. */}
+            and removed as the app runs. Persistent empty listeners for the
+            whole touch set (touchstart/touchmove/touchend/touchcancel),
+            registered before anything else and never removed, keep click
+            delivery healthy (SO 24077725's recipe — touchstart alone was
+            still leaving episodes). They are passive and empty on purpose:
+            they must exist, not do anything. See docs/bug-list notes /
+            SO 41972388. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{document.addEventListener("touchstart",function(){},{passive:true})}catch(e){}})();`,
+            __html: `(function(){try{["touchstart","touchmove","touchend","touchcancel"].forEach(function(t){document.addEventListener(t,function(){},{passive:true})})}catch(e){}})();`,
           }}
         />
         {children}

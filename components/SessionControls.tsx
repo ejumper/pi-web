@@ -31,9 +31,10 @@ interface Props {
   thinkingLevelMap?: Record<string, string | null> | null;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
-  hasOpenFile?: boolean;
-  fileIncluded?: boolean;
-  onToggleFileIncluded?: () => void;
+  onCompact?: () => void;
+  onAbortCompaction?: () => void;
+  isCompacting?: boolean;
+  compactError?: string | null;
   soundEnabled?: boolean;
   onSoundToggle?: () => void;
 }
@@ -41,8 +42,8 @@ interface Props {
 /**
  * Session-level controls, moved out of the prompt editor's overflow menu so
  * they're always visible in the sidebar (and never behind "More" on mobile):
- * terminal guard, read/write mode, reasoning level, tool preset, open-file
- * inclusion, and the completion sound. Dropdowns open upward like they did
+ * terminal guard, read/write mode, reasoning level, tool preset, context
+ * compaction, and the completion sound. Dropdowns open upward like they did
  * in the prompt row — the panel sits at the bottom of the sidebar.
  */
 export function SessionControls({
@@ -56,9 +57,10 @@ export function SessionControls({
   thinkingLevelMap,
   toolPreset,
   onToolPresetChange,
-  hasOpenFile,
-  fileIncluded,
-  onToggleFileIncluded,
+  onCompact,
+  onAbortCompaction,
+  isCompacting,
+  compactError,
   soundEnabled,
   onSoundToggle,
 }: Props) {
@@ -278,33 +280,48 @@ export function SessionControls({
         </div>
       )}
 
-      {/* Open-file inclusion — session-scoped: once excluded the file stays
-          out of chat prompts until toggled back on (not just the next one). */}
-      {hasOpenFile && onToggleFileIncluded && (
-        <button
-          onClick={onToggleFileIncluded}
-          title={fileIncluded
-            ? "Open file is sent with chat prompts — click to exclude it for this session (until re-enabled)"
-            : "Open file is excluded from chat prompts for this session — click to re-include it"}
-          aria-label={fileIncluded ? "Exclude open file from chat for this session" : "Include open file with chat prompts"}
-          style={rowStyle(false, !fileIncluded)}
-          onMouseEnter={(e) => hover(e, false)}
-          onMouseLeave={(e) => unhover(e, false)}
-        >
-          {fileIncluded ? (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-            </svg>
-          ) : (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="5" y1="21" x2="19" y2="3" />
-            </svg>
+      {/* Compact context — moved here from the prompt row (it was easy to
+          fat-thumb next to send); open-file inclusion swapped into its place
+          under the prompt editor. */}
+      {onCompact && (
+        <div style={{ position: "relative" }}>
+          {compactError && (
+            <div style={{
+              position: "absolute", bottom: "calc(100% + 6px)", left: 8, right: 8,
+              background: "#1f2937", color: "#f87171",
+              fontSize: 11, padding: "4px 8px", borderRadius: 5,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              pointerEvents: "none",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.2)", zIndex: 100,
+            }}>
+              {compactError}
+            </div>
           )}
-          {fileIncluded ? "Open file: included" : "Open file: excluded"}
-        </button>
+          <button
+            onClick={isCompacting ? onAbortCompaction : onCompact}
+            disabled={isStreaming && !isCompacting}
+            title={isCompacting ? "Stop compaction" : "Compact context"}
+            aria-label={isCompacting ? "Stop compaction" : "Compact context"}
+            style={{
+              ...rowStyle(isStreaming && !isCompacting, isCompacting),
+              ...(isCompacting ? { color: "#ef4444" } : {}),
+            }}
+            onMouseEnter={(e) => hover(e, isStreaming && !isCompacting)}
+            onMouseLeave={(e) => unhover(e, isStreaming && !isCompacting)}
+          >
+            {isCompacting ? (
+              <svg width="12" height="12" viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}>
+                <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
+                <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
+              </svg>
+            )}
+            {isCompacting ? "Compacting…" : "Compact"}
+          </button>
+        </div>
       )}
 
       {/* Completion sound */}

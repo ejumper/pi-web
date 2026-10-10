@@ -18,6 +18,7 @@ export function ConfirmDialog({
 }) {
   return (
     <div
+      className="modal-overlay"
       style={{ position: "fixed", inset: 0, zIndex: 400, background: "rgba(0,0,0,0.28)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onPointerDown={(e) => { e.stopPropagation(); onCancel(); }}
     >

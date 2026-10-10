@@ -843,6 +843,7 @@ export function SkillsConfig({
 
   return (
     <div
+      className="modal-overlay"
       style={{
         position: "fixed",
         inset: 0,
@@ -860,8 +861,8 @@ export function SkillsConfig({
         style={{
           width: isMobile ? "calc(100vw - 16px)" : 860,
           maxWidth: "calc(100vw - 16px)",
-          height: isMobile ? "calc(100dvh - 16px)" : "78vh",
-          maxHeight: "calc(100dvh - 16px)",
+          height: isMobile ? "calc(100% - 16px)" : "78vh",
+          maxHeight: "calc(100% - 16px)",
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 10,
