@@ -10,10 +10,10 @@ import { markChatTtsBusy } from "./chat-runtime";
  *
  * Backend policy (same shape as the model policy): the desktop's read-aloud
  * router (speakaloud-tts-router on :8880 — itself local-GGUF-first with its own
- * MiMo fallback) when it answers its health probe; otherwise the MiMo
- * voiceclone endpoint called directly from here. Chunking is pi-web read-aloud
- * Tier-1 (`sanitizeForSpeech` + `chunkText`, 300–500 char chunks) via
- * lib/speak — playback starts on chunk 0 while later chunks synthesize.
+ * MiMo fallback) when it answers its health probe; otherwise the server's
+ * piper-tts container. Chunking is pi-web read-aloud Tier-1 (`sanitizeForSpeech`
+ * + `chunkText`, 300–500 char chunks) via lib/speak — playback starts on chunk
+ * 0 while later chunks synthesize.
  *
  * Caching: single-slot — audio for one message (sessionId:entryId) is kept and
  * dropped the moment another message's audio is requested. That is the spec's
@@ -22,8 +22,14 @@ import { markChatTtsBusy } from "./chat-runtime";
  */
 
 const TTS_ROUTER_URL = `http://${DESKTOP_HOST}:8880`;
-const MIMO_URL = (process.env.MIMO_API_URL || "https://token-plan-sgp.xiaomimimo.com/v1").replace(/\/$/, "");
-const MIMO_TTS_MODEL = process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts-voiceclone";
+// Piper (server container, /opt/piper-tts). It publishes on the server's
+// loopback AND the server's tailnet IP — the tailnet address is the one that
+// works from every pi-web deployment (this container and the desktop service),
+// so it is the default. `host.docker.internal` is NOT an alternative: piper's
+// loopback publish is invisible to containers, because host-gateway resolves to
+// the docker bridge gateway, not to the host's loopback.
+const PIPER_URL = (process.env.PI_CHAT_TTS_FALLBACK_URL || "http://100.93.215.27:8900").replace(/\/$/, "");
+const PIPER_SAMPLE_RATE = 22050;
 const VOICE_SETTINGS_PATH = join(homedir(), ".pi", "agent", "pi-chat-voice.json");
 // Compose env is the FALLBACK — a voice picked in the UI persists to
 // pi-chat-voice.json (next to pi's own config) and wins until changed.
@@ -159,7 +165,7 @@ async function synthesize(text: string, voice: string): Promise<ChatTtsChunk> {
     const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
     return { buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length), raw]), mime: "audio/wav" };
   }
-  return synthesizeViaMimo(text, voice);
+  return synthesizeViaPiper(text);
 }
 
 async function routerHealthy(): Promise<boolean> {
@@ -172,42 +178,28 @@ async function routerHealthy(): Promise<boolean> {
 }
 
 /**
- * Direct MiMo voiceclone — the desktop is unreachable, so the voice reference
- * WAV must be local: <VOICES_DIR>/<voice>.wav, copied from the desktop's
- * ~/Audio-Visual/TTS/voices/. Same request shape as the read-aloud router's own
- * cloud backend (tts_router.py gen_chunk): the reference wav rides along as a
- * base64 data URL per request, and the reply is a base64 WAV at 24 kHz mono.
+ * Piper — the desktop router is unreachable, so synthesis goes to the server's
+ * piper-tts container instead. Same request shape as the router (`input` only);
+ * `voice` is deliberately not sent: piper's voice is baked into the model on the
+ * server (en_US-addie) and the param is accepted-and-ignored there, so the Voice
+ * popup only has an effect on the router path. Reply is real WAV, 22.05 kHz
+ * mono s16le — passed through as-is, with the same defensive header wrap the
+ * router path uses in case a deployment ever returns bare PCM.
  */
-async function synthesizeViaMimo(text: string, voice: string): Promise<ChatTtsChunk> {
-  const apiKey = process.env.MIMO_API_KEY;
-  if (!apiKey) throw new Error("MIMO_API_KEY not set and TTS router unreachable");
-
-  const voicePath = join(VOICES_DIR, `${voice}.wav`);
-  if (!existsSync(voicePath)) {
-    throw new Error(`voice reference wav missing: ${voicePath}`);
-  }
-  const voiceUrl = "data:audio/wav;base64," + readFileSync(voicePath).toString("base64");
-
-  const res = await fetch(`${MIMO_URL}/chat/completions`, {
+async function synthesizeViaPiper(text: string): Promise<ChatTtsChunk> {
+  const res = await fetch(`${PIPER_URL}/v1/audio/speech`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": apiKey,
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MIMO_TTS_MODEL,
-      messages: [
-        { role: "user", content: "" },
-        { role: "assistant", content: text },
-      ],
-      audio: { format: "wav", voice: voiceUrl },
-    }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input: text, response_format: "wav" }),
     signal: AbortSignal.timeout(180_000),
   });
-  if (!res.ok) throw new Error(`MiMo TTS returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = (await res.json()) as { choices?: { message?: { audio?: { data?: string } } }[] };
-  const b64 = data.choices?.[0]?.message?.audio?.data;
-  if (!b64) throw new Error("MiMo TTS returned no audio");
-  return { buf: Buffer.from(b64, "base64"), mime: "audio/wav" };
+  if (!res.ok) throw new Error(`piper TTS returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+
+  const raw = Buffer.from(await res.arrayBuffer());
+  if (raw.length === 0) throw new Error("piper TTS returned no audio");
+  const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
+  return {
+    buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length, PIPER_SAMPLE_RATE), raw]),
+    mime: "audio/wav",
+  };
 }
