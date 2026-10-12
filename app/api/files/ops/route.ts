@@ -30,6 +30,7 @@ function validName(name: unknown): name is string {
  *   rename  { from, newName }   — rename within the same parent
  *   delete  { path }            — remove file or directory (recursive)
  *   copy    { from, toDir }     — copy/move-less paste (recursive for dirs)
+ *   move    { from, toDir }     — relocate into a dir; never overwrites, never nests into itself
  */
 export async function POST(req: NextRequest) {
   const root = getRoot();
@@ -82,6 +83,51 @@ export async function POST(req: NextRequest) {
       const to = path.join(toDir, path.basename(from));
       if (to === from) return NextResponse.json({ ok: true }); // paste in place
       await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+      return NextResponse.json({ ok: true, path: to });
+    }
+
+    if (action === "move") {
+      const from = jail(root, String(body.from ?? ""));
+      const toDir = jail(root, String(body.toDir ?? ""));
+      if (!from || !toDir) return NextResponse.json({ error: "path outside root" }, { status: 403 });
+      if (from === root) return NextResponse.json({ error: "cannot move the browse root" }, { status: 400 });
+      const srcStat = await fs.lstat(from); // missing source -> ENOENT -> 404
+      const dirStat = await fs.lstat(toDir); // missing destination -> ENOENT -> 404
+      if (!dirStat.isDirectory()) return NextResponse.json({ error: "destination is not a folder" }, { status: 400 });
+      if (srcStat.isDirectory() && (toDir === from || toDir.startsWith(from + path.sep))) {
+        return NextResponse.json({ error: "cannot move a folder into itself" }, { status: 400 });
+      }
+      const to = path.join(toDir, path.basename(from));
+      const jailedTo = jail(root, to);
+      if (!jailedTo) return NextResponse.json({ error: "path outside root" }, { status: 403 });
+      if (to === from) return NextResponse.json({ ok: true, path: from }); // already in place
+      // Never let rename() replace whatever sits at the destination: on POSIX it
+      // silently overwrites — the one outcome a "move" must never produce.
+      let exists = true;
+      try {
+        await fs.lstat(to);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") exists = false;
+        else throw e;
+      }
+      if (exists) return NextResponse.json({ error: "already exists" }, { status: 409 });
+      try {
+        await fs.rename(from, to);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+        // Different filesystem: copy first (errorOnExist keeps the no-overwrite
+        // guarantee even against a race), remove the original only afterwards.
+        try {
+          await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+        } catch (cpErr) {
+          // cp failed -> `to` is partial and was absent before: clean it up.
+          await fs.rm(to, { recursive: true }).catch(() => {});
+          throw cpErr;
+        }
+        // The copy is complete here, so a failure to delete the original must
+        // NOT delete the copy too — leaving both is the safe direction.
+        await fs.rm(from, { recursive: true });
+      }
       return NextResponse.json({ ok: true, path: to });
     }
 

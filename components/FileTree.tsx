@@ -24,6 +24,10 @@ interface Props {
   onOpenFile: (absPath: string) => void;
   /** Directory to reveal + select on mount (the previous tab's working dir). */
   focusPath?: string | null;
+  /** Append a closed @mention of the entry into the chat input. */
+  onLinkInChat?: (absPath: string, isDir: boolean) => void;
+  /** Report a completed move (or rename) so open editor tabs repatch their paths. */
+  onFileMoved?: (oldPath: string, newPath: string) => void;
 }
 
 /* ------------------------- helpers ------------------------- */
@@ -107,7 +111,7 @@ function useClipboard() {
 
 /* ------------------------- component ------------------------- */
 
-export function FileTree({ onOpenFile, focusPath }: Props) {
+export function FileTree({ onOpenFile, focusPath, onLinkInChat, onFileMoved }: Props) {
   const [nodes, setNodes] = useState<FileTreeNode[]>([]);
   const [root, setRoot] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -117,10 +121,34 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
   const [creating, setCreating] = useState<{ parentId: string | null; isDir: boolean } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; node: { id: string; name: string; isDir: boolean } } | null>(null);
   const [confirmState, setConfirmState] = useState<{ message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+  // In-progress "move": the entry being moved (drawn with a white border) while
+  // the toolbar shows Move/Cancel instead of the root path. The destination is
+  // whichever row is currently selected — resolved/validated via moveTarget /
+  // moveBlockReason below; the API re-checks every guard server-side too.
+  const [moveSource, setMoveSource] = useState<{ id: string; name: string; isDir: boolean } | null>(null);
+  const [moveBusy, setMoveBusy] = useState(false);
   const clip = useClipboard();
   const bookmarks = useFileBookmarks();
   const bookmarkSet = useMemo(() => new Set(bookmarks.map((b) => b.path)), [bookmarks]);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  /** Move destination: the selected row's dir (a selected file's parent). */
+  const moveTarget = useMemo(() => {
+    if (!moveSource) return null;
+    const sel = selectedId ? findNode(nodes, selectedId) : null;
+    if (!sel) return null;
+    return sel.isDir ? sel.id : parentOf(sel.id);
+  }, [moveSource, selectedId, nodes]);
+
+  /** Non-null = why Move can't run right now; null = allowed. */
+  const moveBlockReason: string | null = (() => {
+    if (!moveSource) return null;
+    if (!moveTarget) return "Select a destination folder";
+    if (moveTarget === moveSource.id) return "Cannot move into itself";
+    if (moveSource.isDir && moveTarget.startsWith(moveSource.id + "/")) return "Cannot move into its own subfolder";
+    if (moveTarget === parentOf(moveSource.id)) return "Already in this folder";
+    return null;
+  })();
 
   // Long-press = right-click on touch devices (iOS's native contextmenu on
   // long-press is unreliable — see hooks/useLongPress.ts).
@@ -167,6 +195,16 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
       window.removeEventListener("scroll", close, true);
     };
   }, [menu]);
+
+  // Esc aborts an in-progress move (same as the Cancel button). Skipped while
+  // the context menu is open — that Escape belongs to the menu (and the `menu`
+  // dep re-runs this effect after it closes).
+  useEffect(() => {
+    if (!moveSource || menu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMoveSource(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [moveSource, menu]);
 
   // Initial load (+ focus reveal for "new tab from where I'm working")
   useEffect(() => {
@@ -223,9 +261,12 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
 
   /** Refetch one directory's children (post-op refresh). */
   const refreshDir = async (parentId: string | null) => {
+    // The root is not itself a tree node — merging at parentId === root would
+    // silently no-op, so normalize it to null (top level).
+    const id = parentId === root ? null : parentId;
     try {
-      const fresh = await listDir(parentId ?? root);
-      setNodes((prev) => mergeChildren(prev, parentId, fresh));
+      const fresh = await listDir(id ?? root);
+      setNodes((prev) => mergeChildren(prev, id, fresh));
     } catch (e) {
       setError(String(e));
     }
@@ -323,6 +364,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
       return;
     }
     setError(null);
+    onFileMoved?.(node.id, `${parentOf(node.id)}/${trimmed}`);
     await refreshDir(parentOf(node.id));
   };
 
@@ -342,6 +384,8 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
         }
         setError(null);
         if (selectedId === node.id || selectedId?.startsWith(`${node.id}/`)) setSelectedId(null);
+        // Deleting the pending move source (or its ancestor) aborts the move.
+        if (moveSource && (moveSource.id === node.id || moveSource.id.startsWith(`${node.id}/`))) setMoveSource(null);
         await refreshDir(parentOf(node.id));
       })(),
     });
@@ -354,6 +398,35 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
     if (!res.ok) return; // stale clipboard — silently do nothing
     setError(null);
     await refreshDir(toDir);
+  };
+
+  /* -------- move (context menu → white border → Move/Cancel toolbar) -------- */
+
+  const doMove = async () => {
+    if (!moveSource || moveBusy || moveBlockReason) return;
+    const dest = moveTarget as string;
+    const from = moveSource.id;
+    setMoveBusy(true);
+    try {
+      const res = await ops({ action: "move", from, toDir: dest });
+      if (!res.ok) {
+        // Stay in move mode: the user can pick another destination or Cancel.
+        // (409 = destination name taken, 404 = source/dest vanished, 403 = jail.)
+        setError((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as { path?: string };
+      setError(null);
+      const newPath = data.path ?? `${dest}/${from.slice(from.lastIndexOf("/") + 1)}`;
+      setMoveSource(null);
+      onFileMoved?.(from, newPath);
+      // Both parents changed: source's old dir lost an entry, dest gained one.
+      await refreshDir(parentOf(from));
+      await refreshDir(dest);
+      setSelectedId(dest);
+    } finally {
+      setMoveBusy(false);
+    }
   };
 
   const visible = useMemo(() => filterHidden(nodes, showHidden), [nodes, showHidden]);
@@ -382,9 +455,39 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       {/* Toolbar: root path + actions */}
       <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "5px 8px 5px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={root}>
-          {root ? `~${root.replace(/^\/home\/[^/]+/, "")}` : "\u200b"}
-        </div>
+        {moveSource ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+            <button
+              onClick={() => void doMove()}
+              disabled={moveBusy || !!moveBlockReason}
+              title={moveBlockReason ?? `Move "${moveSource.name}" here`}
+              style={{
+                padding: "4px 12px", fontSize: 12, fontWeight: 600, borderRadius: 5,
+                border: "none", flexShrink: 0,
+                cursor: moveBusy || moveBlockReason ? "default" : "pointer",
+                background: moveBusy || moveBlockReason ? "var(--bg-hover)" : "var(--accent)",
+                color: moveBusy || moveBlockReason ? "var(--text-dim)" : "#fff",
+              }}
+            >
+              {moveBusy ? "Moving…" : "Move"}
+            </button>
+            <button
+              onClick={() => setMoveSource(null)}
+              title="Cancel move (Esc)"
+              style={{
+                padding: "4px 12px", fontSize: 12, borderRadius: 5, flexShrink: 0,
+                border: "1px solid var(--border)", background: "none",
+                color: "var(--text-muted)", cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={root}>
+            {root ? `~${root.replace(/^\/home\/[^/]+/, "")}` : "\u200b"}
+          </div>
+        )}
         {tbButton(showHidden ? "Hide hidden files" : "Show hidden files", () => setShowHidden((v) => !v), showHidden ? (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
@@ -433,6 +536,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
             const data = node.data as FileTreeNode;
             const isOpen = !!node.isOpen;
             const isRenaming = renameId === data.id;
+            const isMoveSource = moveSource?.id === data.id;
 
             // Inline name input (create or rename)
             if (data.creating || isRenaming) {
@@ -470,6 +574,10 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
                   fontSize: 13,
                   color: data.isDir ? "var(--text)" : "var(--text-muted)",
                   background: node.isSelected || data.id === selectedId ? "var(--bg-selected)" : "transparent",
+                  // white "this is the item being moved" border
+                  outline: isMoveSource ? "2px solid #fff" : undefined,
+                  outlineOffset: isMoveSource ? "-2px" : undefined,
+                  boxShadow: isMoveSource ? "0 0 0 1px rgba(0,0,0,0.45)" : undefined,
                   // no text selection / touch callouts on rows — they fight
                   // long-press (iOS spends the hold on selection UI)
                   userSelect: "none",
@@ -489,7 +597,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
                       }
                       node.toggle();
                     })();
-                  } else {
+                  } else if (!moveSource) {
                     onOpenFile(data.id);
                   }
                 }}
@@ -532,7 +640,7 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
           style={{
             position: "fixed",
             left: Math.min(menu.x, window.innerWidth - 170),
-            top: Math.min(menu.y, window.innerHeight - 260),
+            top: Math.min(menu.y, window.innerHeight - 320),
             zIndex: 200,
             minWidth: 160,
             background: "var(--bg)",
@@ -565,6 +673,11 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
               run: () => void doPaste(menu.node),
             },
             {
+              label: "Move",
+              disabled: false,
+              run: () => { setError(null); setMoveSource(menu.node); },
+            },
+            {
               label: "Rename",
               disabled: false,
               run: () => startRename(menu.node),
@@ -575,6 +688,11 @@ export function FileTree({ onOpenFile, focusPath }: Props) {
               run: () => {
                 addBookmark({ path: menu.node.id, name: menu.node.name, kind: menu.node.isDir ? "dir" : "file" });
               },
+            },
+            {
+              label: "Link in chat",
+              disabled: false,
+              run: () => onLinkInChat?.(menu.node.id, menu.node.isDir),
             },
             {
               label: "Delete",

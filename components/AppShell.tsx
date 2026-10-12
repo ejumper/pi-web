@@ -292,8 +292,17 @@ export function AppShell() {
     if (mentions) chatInputRef.current?.insertText(mentions);
   }, []);
 
+
   const [initialSessionId] = useState<string | null>(() => searchParams.get("session"));
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  // FileTree's "Link in chat" menu row: same closed @mention format as the
+  // manual @ button — relative to the session cwd, absolute when outside it
+  // (getRelativeFilePath falls back to the full path).
+  const handleLinkInChat = useCallback((absPath: string, isDir: boolean) => {
+    chatInputRef.current?.insertText(
+      buildAtMentionText(getRelativeFilePath(absPath, activeCwd ?? undefined), isDir),
+    );
+  }, [activeCwd]);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !searchParams.get("session"));
 
@@ -1428,7 +1437,12 @@ export function AppShell() {
               }}
             >
               {tab.explorer ? (
-                <FileTree focusPath={tab.focusPath} onOpenFile={(p) => handleOpenFileIntoTab(tab.id, p)} />
+                <FileTree
+                  focusPath={tab.focusPath}
+                  onOpenFile={(p) => handleOpenFileIntoTab(tab.id, p)}
+                  onLinkInChat={handleLinkInChat}
+                  onFileMoved={handleFileMoved}
+                />
               ) : (
               <FileViewer
                 filePath={tab.filePath}
@@ -1446,7 +1460,11 @@ export function AppShell() {
             </div>
           ))}
           {fileTabs.length === 0 && (
-            <FileTree onOpenFile={(p) => handleOpenFile(p, getFileName(p), selectedSession?.id ?? null)} />
+            <FileTree
+              onOpenFile={(p) => handleOpenFile(p, getFileName(p), selectedSession?.id ?? null)}
+              onLinkInChat={handleLinkInChat}
+              onFileMoved={handleFileMoved}
+            />
           )}
         </div>
       </div>
