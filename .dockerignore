@@ -1,0 +1,9 @@
+# keep the build context (and the COPY layer) small — without this, the full
+# .git history and any local node_modules ride into every docker build
+.git
+node_modules
+.next
+.next-dev
+.next-test
+*.log
+.env*

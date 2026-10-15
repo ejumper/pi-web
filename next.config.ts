@@ -14,6 +14,12 @@ try {
 const publicHostname = process.env.PI_WEB_PUBLIC_URL ? new URL(process.env.PI_WEB_PUBLIC_URL).host : undefined;
 
 const nextConfig: NextConfig = {
+  // self-contained server bundle for the container image (.next/standalone):
+  // the Docker final stage copies only this + static assets instead of the
+  // whole build-stage /app (node_modules incl. devDeps + sources), cutting
+  // the image from ~4.5 GB to a few hundred MB. Desktop dev/prod keep using
+  // `next dev` / `next start` from the full repo — standalone is additive.
+  output: "standalone",
   // dev server writes to its own dist dir (PI_WEB_DEV_DIST=.next-dev) so
   // `next dev` iteration can run alongside the production `next start`
   // without clobbering .next

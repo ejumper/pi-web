@@ -84,11 +84,79 @@ type ExtensionBindingOptions = {
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 // Extensions require a complete Theme, while the web UI applies its own styling.
+// pi 1.3's Theme constructor resolves token fallbacks across the merged color
+// map and THROWS on gaps ("scrollbarTrack has unresolved fallback muted" was
+// the first hit during the 1.3 bump), so the plain theme defines EVERY token
+// as "" — the SDK's terminal-default value. The overrides below discard all
+// styling anyway; the map just has to be complete. `satisfies` keeps it
+// honest: a token pi adds later fails this build until it lands here.
+const PLAIN_THEME_COLORS = {
+  accent: "",
+  bashMode: "",
+  border: "",
+  borderAccent: "",
+  borderMuted: "",
+  customMessageLabel: "",
+  customMessageText: "",
+  dim: "",
+  error: "",
+  mdCode: "",
+  mdCodeBlock: "",
+  mdCodeBlockBorder: "",
+  mdHeading: "",
+  mdHr: "",
+  mdLink: "",
+  mdLinkUrl: "",
+  mdListBullet: "",
+  mdQuote: "",
+  mdQuoteBorder: "",
+  muted: "",
+  scrollbarThumb: "",
+  scrollbarTrack: "",
+  searchMatchText: "",
+  success: "",
+  syntaxComment: "",
+  syntaxFunction: "",
+  syntaxKeyword: "",
+  syntaxNumber: "",
+  syntaxOperator: "",
+  syntaxPunctuation: "",
+  syntaxString: "",
+  syntaxType: "",
+  syntaxVariable: "",
+  text: "",
+  thinkingHigh: "",
+  thinkingLow: "",
+  thinkingMax: "",
+  thinkingMedium: "",
+  thinkingMinimal: "",
+  thinkingOff: "",
+  thinkingText: "",
+  thinkingXhigh: "",
+  toolDiffAdded: "",
+  toolDiffContext: "",
+  toolDiffRemoved: "",
+  toolOutput: "",
+  toolTitle: "",
+  userMessageText: "",
+  warning: "",
+} satisfies ConstructorParameters<typeof Theme>[0];
+
+const PLAIN_THEME_BG_COLORS = {
+  customMessageBg: "",
+  searchMatchBg: "",
+  selectedBg: "",
+  toolErrorBg: "",
+  toolPendingBg: "",
+  toolSuccessBg: "",
+  userMessageBg: "",
+} satisfies ConstructorParameters<typeof Theme>[1];
+
 class PlainTextTheme extends Theme {
   constructor() {
     super(
-      { thinkingXhigh: "" } as ConstructorParameters<typeof Theme>[0],
-      {} as ConstructorParameters<typeof Theme>[1],
+      PLAIN_THEME_COLORS,
+      PLAIN_THEME_BG_COLORS,
       "truecolor",
     );
   }

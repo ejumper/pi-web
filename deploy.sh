@@ -61,6 +61,18 @@ case "${1:-deploy}" in
 
     git pull --ff-only origin main
 
+    # drift notice (read-only — the bump itself happens on the desktop dev
+    # checkout via bump-pi.sh; server-local dependency edits would trip this
+    # script's own overlap guard). Works on both image layouts: pre-standalone
+    # npm ci and post-standalone traced node_modules both keep the package at
+    # /app/node_modules.
+    RUNNING_PI=$(docker exec pi-web node -p "require('/app/node_modules/@earendil-works/pi-coding-agent/package.json').version" 2>/dev/null || echo unknown)
+    LATEST_PI=$(npm view @earendil-works/pi-coding-agent version 2>/dev/null || echo unknown)
+    if [ "$RUNNING_PI" != "$LATEST_PI" ] && [ "$RUNNING_PI" != unknown ] && [ "$LATEST_PI" != unknown ]; then
+      echo "note: running container has pi-coding-agent $RUNNING_PI; npm latest is $LATEST_PI."
+      echo "      to update: run bump-pi.sh on the desktop, push, then re-run this deploy."
+    fi
+
     # build + recreate in one step. Plain `restart` would reuse the old image
     # and keep serving the old bundle while everything looks fine.
     compose up -d --build
@@ -71,6 +83,11 @@ case "${1:-deploy}" in
       CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}" || true)
       if [ "$CODE" = "200" ]; then
         echo "deployed and serving (HTTP 200)."
+        # every deploy re-tags :latest, demoting the previous image to a
+        # dangling <none> — nothing else removes it (45 × ~4.4 GB piled up
+        # once, 2026-10-10). Prune dangling only: tagged images and other
+        # stacks are never touched.
+        docker image prune -f
         exit 0
       fi
       sleep 2
