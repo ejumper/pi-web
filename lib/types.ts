@@ -76,6 +76,16 @@ export interface AssistantMessage {
   };
 }
 
+/** pi 1.3 section-delta system message (emitted at run start when the
+ * structured system prompt changes). Not chat content — the UI must not
+ * render or store it; the message_end handler drops it explicitly. */
+export interface SystemMessage {
+  role: "system";
+  content: string;
+  sections?: Record<string, string>;
+  timestamp?: number;
+}
+
 export interface ToolResultMessage {
   role: "toolResult";
   toolCallId: string;
@@ -95,7 +105,7 @@ export interface CustomMessage {
   timestamp?: number;
 }
 
-export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage | CustomMessage;
+export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage | CustomMessage | SystemMessage;
 
 export type ExtensionUiRequest =
   | {
