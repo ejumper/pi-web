@@ -1002,6 +1002,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // open) but dedupe by entry id instead.
         if (!agentRunningRef.current && !isExternalLiveRef.current) break;
         const completed = event.message as AgentMessage | undefined;
+        // pi 1.3 emits message_end for the system section-delta message (new
+        // in 1.3.0) before the user message. It is not chat content, and
+        // appending it would break the optimistic-bubble adjacency the user
+        // dedup below relies on — the delivered user message would then append
+        // beside the optimistic one (double bubble). Drop system messages.
+        if (completed?.role === "system") break;
         if (isExternalLiveRef.current) {
           if (!completed) break;
           const entryId = event.entryId as string | undefined;
