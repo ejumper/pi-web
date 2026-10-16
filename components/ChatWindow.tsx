@@ -278,6 +278,18 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handlePromptWithStreamingBehavior(withFileMention(message, images), behavior, images)
   ), [handlePromptWithStreamingBehavior, withFileMention]);
 
+  // Autofocus the prompt editor once per page load, after the session
+  // settles (the composer commits behind the loading gate; the short delay
+  // lets that first commit land). Session switches don't refocus —
+  // initial load only.
+  const initialFocusDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialFocusDoneRef.current || loading) return;
+    initialFocusDoneRef.current = true;
+    const t = setTimeout(() => chatInputRef?.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, [loading, chatInputRef]);
+
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
     registerAbortHandler(agentRunning ? handleAbort : null);
