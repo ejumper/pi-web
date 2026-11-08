@@ -8,12 +8,16 @@ import { markChatTtsBusy } from "./chat-runtime";
 /**
  * TTS for the /chat voice page (app/chat).
  *
- * Backend policy (same shape as the model policy): the desktop's read-aloud
- * router (speakaloud-tts-router on :8880 — itself local-GGUF-first with its own
- * MiMo fallback) when it answers its health probe; otherwise the server's
- * piper-tts container. Chunking is pi-web read-aloud Tier-1 (`sanitizeForSpeech`
- * + `chunkText`, 300–500 char chunks) via lib/speak — playback starts on chunk
- * 0 while later chunks synthesize.
+ * Backend policy, tried in order. Chunking is pi-web read-aloud Tier-1
+ * (`sanitizeForSpeech` + `chunkText`, 300–500 char chunks) via lib/speak and
+ * happens HERE — one whole chunk per request — so a backend swap mid-message
+ * is seamless; playback starts on chunk 0 while later chunks synthesize.
+ *   1. Server2's GPU piper twin — same server.py/en_US-addie as the server's
+ *      own container, synthesized on its 1050 Ti; reached via its nginx ingress.
+ *   2. The server's own piper-tts container (CPU, same baked-in voice).
+ *   3. The desktop's read-aloud router (:8880 — custom voices via the Voice
+ *      popup). Deliberately last: effectively dormant, kept in code so the
+ *      custom-voice path is one reorder away if it's ever wanted back.
  *
  * Caching: single-slot — audio for one message (sessionId:entryId) is kept and
  * dropped the moment another message's audio is requested. That is the spec's
@@ -22,12 +26,18 @@ import { markChatTtsBusy } from "./chat-runtime";
  */
 
 const TTS_ROUTER_URL = `http://${DESKTOP_HOST}:8880`;
-// Piper (server container, /opt/piper-tts). It publishes on the server's
-// loopback AND the server's tailnet IP — the tailnet address is the one that
-// works from every pi-web deployment (this container and the desktop service),
-// so it is the default. `host.docker.internal` is NOT an alternative: piper's
-// loopback publish is invisible to containers, because host-gateway resolves to
-// the docker bridge gateway, not to the host's loopback.
+// Tier 1 — Server2's GPU piper twin (/opt/piper-tts on the tts box): same
+// server.py and en_US-addie voice as the server's own, synthesized on a
+// 1050 Ti. The container binds loopback-only there, so nginx on the tailnet
+// IP is the only way in — the /piper/ prefix is part of the contract.
+const SERVER2_PIPER_URL = (process.env.PI_CHAT_TTS_SERVER2_URL || "http://100.75.135.87").replace(/\/$/, "");
+// Tier 2 — the server's own piper container (/opt/piper-tts). It publishes on
+// the server's loopback AND the server's tailnet IP — the tailnet address is
+// the one that works from every pi-web deployment (this container and the
+// desktop service), so it is the default. `host.docker.internal` is NOT an
+// alternative: piper's loopback publish is invisible to containers, because
+// host-gateway resolves to the docker bridge gateway, not to the host's
+// loopback.
 const PIPER_URL = (process.env.PI_CHAT_TTS_FALLBACK_URL || "http://100.93.215.27:8900").replace(/\/$/, "");
 const PIPER_SAMPLE_RATE = 22050;
 const VOICE_SETTINGS_PATH = join(homedir(), ".pi", "agent", "pi-chat-voice.json");
@@ -136,58 +146,89 @@ export async function chatTtsChunk(sessionId: string, chunkIndex: number): Promi
 }
 
 async function synthesize(text: string, voice: string): Promise<ChatTtsChunk> {
-  if (await routerHealthy()) {
-    const res = await fetch(`${TTS_ROUTER_URL}/v1/audio/speech`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        input: text,
-        voice,
-        model: "tts-1-en",
-        // response_format is effectively ignored by the router's local backend:
-        // it always streams raw PCM s16le 24 kHz mono ("mp3" gets the same,
-        // just with a different (wrong) content-type label). So ask for "pcm"
-        // and normalize ourselves — see normalization below.
-        response_format: "pcm",
-        // The router's optimized backend is ~20x faster with stream:true even
-        // though we buffer the whole response (see pi-web read-aloud notes).
-        stream: true,
-        temperature: 0.4,
-      }),
-      signal: AbortSignal.timeout(180_000),
-    });
-    if (!res.ok) throw new Error(`TTS router returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const raw = Buffer.from(await res.arrayBuffer());
-    // Normalize to a real WAV file: if the body already carries a RIFF header
-    // pass it through, otherwise wrap the raw PCM in one. The client always
-    // receives valid audio/wav — raw PCM mislabeled as mp3 was the silent-
-    // playback bug this normalization exists for.
-    const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
-    return { buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length), raw]), mime: "audio/wav" };
+  const failures: string[] = [];
+  // Tiers 1+2: the two piper deployments — identical contract (same server.py;
+  // /chat chunking happens here anyway, one whole chunk per request), so
+  // failover between them is seamless.
+  for (const [label, base] of [
+    ["Server2 piper (GPU)", `${SERVER2_PIPER_URL}/piper`],
+    ["local piper", PIPER_URL],
+  ] as const) {
+    try {
+      if (!(await piperHealthy(base))) throw new Error("health probe failed");
+      return await piperSpeech(base, text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[chat-tts] ${label} unavailable (${msg})`);
+      failures.push(`${label}: ${msg}`);
+    }
   }
-  return synthesizeViaPiper(text);
+  // Tier 3: the desktop's read-aloud router — deliberately last, effectively
+  // dormant. The only path that honors the Voice popup (piper's voice is
+  // baked into the model), kept so custom voices are one reorder away.
+  try {
+    if (!(await routerHealthy())) throw new Error("health probe failed");
+    return await routerSpeech(text, voice);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[chat-tts] desktop router unavailable (${msg})`);
+    failures.push(`desktop router: ${msg}`);
+  }
+  throw new Error(`no TTS backend answered — ${failures.join("; ")}`);
 }
 
-async function routerHealthy(): Promise<boolean> {
+/** Fast liveness check so a dead backend costs 2.5s, not a hung POST. */
+async function piperHealthy(base: string): Promise<boolean> {
   try {
-    const res = await fetch(`${TTS_ROUTER_URL}/health`, { signal: AbortSignal.timeout(2_500) });
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2_500) });
     return res.ok;
   } catch {
     return false;
   }
 }
 
+/** The desktop's read-aloud router (tier 3): raw-PCM stream, normalized to WAV below. */
+async function routerSpeech(text: string, voice: string): Promise<ChatTtsChunk> {
+  const res = await fetch(`${TTS_ROUTER_URL}/v1/audio/speech`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      input: text,
+      voice,
+      model: "tts-1-en",
+      // response_format is effectively ignored by the router's local backend:
+      // it always streams raw PCM s16le 24 kHz mono ("mp3" gets the same,
+      // just with a different (wrong) content-type label). So ask for "pcm"
+      // and normalize ourselves — see normalization below.
+      response_format: "pcm",
+      // The router's optimized backend is ~20x faster with stream:true even
+      // though we buffer the whole response (see pi-web read-aloud notes).
+      stream: true,
+      temperature: 0.4,
+    }),
+    signal: AbortSignal.timeout(180_000),
+  });
+  if (!res.ok) throw new Error(`TTS router returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const raw = Buffer.from(await res.arrayBuffer());
+  // Normalize to a real WAV file: if the body already carries a RIFF header
+  // pass it through, otherwise wrap the raw PCM in one. The client always
+  // receives valid audio/wav — raw PCM mislabeled as mp3 was the silent-
+  // playback bug this normalization exists for.
+  const isWav = raw.length > 44 && raw.toString("ascii", 0, 4) === "RIFF";
+  return { buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length), raw]), mime: "audio/wav" };
+}
+
 /**
- * Piper — the desktop router is unreachable, so synthesis goes to the server's
- * piper-tts container instead. Same request shape as the router (`input` only);
- * `voice` is deliberately not sent: piper's voice is baked into the model on the
- * server (en_US-addie) and the param is accepted-and-ignored there, so the Voice
- * popup only has an effect on the router path. Reply is real WAV, 22.05 kHz
- * mono s16le — passed through as-is, with the same defensive header wrap the
- * router path uses in case a deployment ever returns bare PCM.
+ * Piper (tiers 1+2) — POST one chunk to a piper deployment. Same request shape
+ * as the router (`input` only); `voice` is deliberately not sent: piper's
+ * voice is baked into the model on both deployments (en_US-addie) and the
+ * param is accepted-and-ignored there, so the Voice popup only has an effect
+ * on the router path. Reply is real WAV, 22.05 kHz mono s16le — passed
+ * through as-is, with the same defensive header wrap the router path uses in
+ * case a deployment ever returns bare PCM.
  */
-async function synthesizeViaPiper(text: string): Promise<ChatTtsChunk> {
-  const res = await fetch(`${PIPER_URL}/v1/audio/speech`, {
+async function piperSpeech(base: string, text: string): Promise<ChatTtsChunk> {
+  const res = await fetch(`${base}/v1/audio/speech`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input: text, response_format: "wav" }),
@@ -202,4 +243,13 @@ async function synthesizeViaPiper(text: string): Promise<ChatTtsChunk> {
     buf: isWav ? raw : Buffer.concat([buildWavHeader(raw.length, PIPER_SAMPLE_RATE), raw]),
     mime: "audio/wav",
   };
+}
+
+async function routerHealthy(): Promise<boolean> {
+  try {
+    const res = await fetch(`${TTS_ROUTER_URL}/health`, { signal: AbortSignal.timeout(2_500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
